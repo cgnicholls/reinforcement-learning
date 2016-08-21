@@ -98,7 +98,7 @@ def compute_policy_gradient(episode_rewards, episode_actions,
         # Compute the policy on the observation and theta.
         pi = compute_policy(episode_observations[t], theta)
         a_t = episode_actions[t]
-        v_t = sum(episode_rewards[0::])
+        v_t = sum(episode_rewards[t::])
         if a_t == 0:
             grad_theta_log_pi = - pi[1] * episode_observations[t] * v_t
         else:
@@ -135,7 +135,7 @@ def run_episode(theta, max_episode_length, render=False):
 # Train the agent
 num_episodes = 1000
 max_episode_length = 200
-initial_step_size = 0.05
+initial_step_size = 0.1
 theta = train_policy_gradient_agent(num_episodes, max_episode_length,
         initial_step_size)
 
