@@ -26,54 +26,80 @@ def policy_gradient_agent(num_episodes, W1, W2, max_episode_length, render=True)
 # - initial_step_size: the initial step size. We decrease the step size
 # proportional to 1/n, where n is the episode number
 def train_policy_gradient_agent(num_episodes, max_episode_length,
-        initial_step_size, render=False):
+        initial_step_size, num_hidden=10, render=False, plot=False):
     # Initialise W1, W2
-    num_hidden = 10
-    W1 = np.random.randn(num_hidden, 210*160) * 0.0001
-    W2 = np.random.randn(1, num_hidden) * 0.0001
+    height = 160
+    width = 210
+    initial_std = 1e-3
+    W1 = np.random.randn(num_hidden, width*height) * initial_std
+    W2 = np.random.randn(1, num_hidden) * initial_std
 
     win_history = []
-    plt.ion()
-    fig = plt.figure()
-    ax1 = fig.add_subplot(1,1,1)
+    if plot:
+        plt.ion()
+        fig = plt.figure()
+        ax1 = fig.add_subplot(1,1,1)
 
     # Gradient ascent with velocity
     v1 = np.zeros(np.shape(W1))
     v2 = np.zeros(np.shape(W2))
 
     gamma = 0.5
+    step_size = initial_step_size
 
     for i_episode in range(num_episodes):
-        # Run an episode with our current policy
-        episode_rewards, episode_actions, episode_observations = \
-        run_episode(W1, W2, max_episode_length, render)
+        batch_rewards = []
+        batch_actions = []
+        batch_observations = []
+        for i_batch in range(10):
+            # Run an episode with our current policy
+            print("Running episode {}.{}".format(i_episode, i_batch))
+            if i_batch == 0:
+                render_episode = render
+            else:
+                render_episode = False
+            episode_rewards, episode_actions, episode_observations = \
+            run_episode(W1, W2, max_episode_length, render_episode)
 
-        # Output episode rewards
-        rewards = np.array(episode_rewards)
-        won = len(rewards[rewards == 1])
-        lost = len(rewards[rewards == -1])
-        print("Won: {} / {}".format(won, won+lost))
+            batch_rewards += episode_rewards
+            batch_actions += episode_actions
+            batch_observations += episode_observations
 
-        win_history.append(float(won))
+            # Output episode rewards
+            rewards = np.array(episode_rewards)
+            won = len(rewards[rewards == 1])
+            lost = len(rewards[rewards == -1])
+            print("AI: {} - {} : RL".format(lost, won))
 
-        # Write W1, W2 to file every 100th episode
-        if (i_episode % 100) == 0:
-            name = 'W1W2-' + str(i_episode) + '.pckl'
+            win_history.append([won, lost])
+            if (i_episode % 10) == 0:
+                print("Writing scores")
+                f = open('rewards.pkl', 'wb')
+                pickle.dump(win_history, f)
+                f.close()
+
+        # Write W1, W2 to file every 10th batch
+        if (i_episode % 10) == 0:
+            name = 'weights/W1W2-' + str(i_episode) + '.pkl'
+            print("Writing W1, W2 to " + name)
             f = open(name, 'wb')
             pickle.dump([W1, W2], f)
             f.close()
 
-        ax1.clear()
-        ax1.plot(win_history)
-        plt.pause(0.0001) 
+        if plot:
+            ax1.clear()
+            ax1.plot(win_history)
+            plt.pause(0.0001) 
 
         # Compute the policy gradient for this trajectory
-        policy_gradient = compute_policy_gradient(episode_rewards,
-                episode_actions, episode_observations, W1, W2)
+        print("Computing gradients")
+        policy_gradient = compute_policy_gradient(batch_rewards,
+                batch_actions, batch_observations, W1, W2)
 
         # Vanilla gradient ascent
-        # We decrease the step size proportional to 1/i_episode
-        step_size = initial_step_size / (1 + i_episode)
+        # We decrease the step size every 50th episode
+        if (i_episode % 50) == 49:
+            step_size /= 2
 
         v1 = gamma * v1 + step_size * policy_gradient[0]
         v2 = gamma * v2 + step_size * policy_gradient[1]
@@ -120,8 +146,12 @@ def sample_action(observation, W1, W2):
 # Computes the sigmoid function
 # u: a real number
 def sigmoid(u):
+    u = np.min([u, 500])
+    u = np.max([u, -500])
     return 1.0 / (1.0 + np.exp(-u))
 
+# Computes the gradient of pi with respect to W1 and W2. Note that pi is the
+# probability of moving up.
 def compute_policy_gradient_one_step(state, W1, W2):
     layer_outputs = compute_policy(state, W1, W2)
     state = layer_outputs[0]
@@ -166,10 +196,14 @@ def compute_policy_gradient(episode_rewards, episode_actions,
 
     grad_W1_log_pi = np.zeros(np.shape(W1))
     grad_W2_log_pi = np.zeros(np.shape(W2))
-    for t in xrange(len(episode_rewards)):
+
+    episode_length = len(episode_rewards)
+
+    for t in xrange(episode_length):
         state = episode_observations[t]
         grad_W1, grad_W2, policy = compute_policy_gradient_one_step(state, W1,
                 W2)
+        
         # Above, we've computed the gradient for going up. But if we actually
         # went down on this action, then we should compute grad log (1-pi),
         # which is (grad (1-pi)) / (1-pi) = -(grad pi) / (1-pi).
@@ -178,10 +212,23 @@ def compute_policy_gradient(episode_rewards, episode_actions,
             grad_W2 = -grad_W2
             policy = 1-policy
 
-        grad_W1_log_pi += grad_W1 / (1e-8 + policy)
-        grad_W2_log_pi += grad_W2 / (1e-8 + policy)
-    return grad_W1_log_pi * sum(episode_rewards), grad_W2_log_pi * \
-sum(episode_rewards)
+        # Try putting the reward as the next nonzero reward. This is the reward
+        # for the current point, i.e. until one person misses the ball.
+        reward = reward_for_this_point(episode_rewards)
+
+        # Update the gradients by this reward
+        grad_W1_log_pi += grad_W1 / (1e-8 + policy) * reward
+        grad_W2_log_pi += grad_W2 / (1e-8 + policy) * reward
+    return grad_W1_log_pi / episode_length, grad_W2_log_pi / episode_length
+
+# Takes a sequence of rewards for each time step, and computes the reward for
+# the current point. This is then next nonzero element, if it exists, and
+# otherwise zero.
+def reward_for_this_point(rewards):
+    for i in xrange(len(rewards)):
+        if rewards[i] != 0:
+            return rewards[i]
+    return 0
 
 # Run an episode with the policy parametrised by theta.
 # - theta: the parameter to use for the policy
@@ -195,6 +242,7 @@ def run_episode(W1, W2, max_episode_length, render=False):
     episode_actions = []
     episode_observations = []
     episode_observations.append(observation)
+    
     for t in xrange(max_episode_length):
         episode_observations.append(observation)
         # If rendering, draw the environment
@@ -205,7 +253,7 @@ def run_episode(W1, W2, max_episode_length, render=False):
         if t > 0:
             state = episode_observations[t] - episode_observations[t-1]
         else:
-            state = episode_observations[0]
+            state = np.zeros(np.shape(episode_observations[0]))
 
         a_t = sample_action(state, W1, W2)
         episode_actions.append(a_t)
@@ -225,8 +273,6 @@ def numerical_gradient(state, W1, W2, eps):
             W1_minus[i,j] -= eps
             grad_W1[i,j] = (compute_policy(state, W1_plus, W2)[-1] -
                     compute_policy(state, W1_minus, W2)[-1]) / (2*eps)
-            if j % 1000 == 0:
-                print("Completed {}/{}".format(j, np.shape(W1)[1]))
 
     grad_W2 = np.zeros(np.shape(W2))
     for i in xrange(np.shape(W2)[0]):
@@ -237,18 +283,17 @@ def numerical_gradient(state, W1, W2, eps):
             W2_minus[i,j] -= eps
             grad_W2[i,j] = (compute_policy(state, W1, W2_plus)[-1] -
                     compute_policy(state, W1, W2_minus)[-1]) / (2*eps)
-        print("Completed {}/{}".format(i, np.shape(W2)[0]))
 
     return grad_W1, grad_W2
 
 # Test gradients
 def test_gradient(eps):
-    height = 10
+    height = 21
     width = 20
-    state = np.random.rand(height, width, 3)
+    state = np.random.randn(height, width, 3)
     num_hidden = 2
-    W1 = np.random.randn(num_hidden, height*width) * 0.001
-    W2 = np.random.randn(1, num_hidden) * 0.001
+    W1 = np.random.randn(num_hidden, height*width) * 0.1
+    W2 = np.random.randn(1, num_hidden) * 0.1
     grad_W1_num, grad_W2_num = numerical_gradient(state, W1, W2, eps)
     grad_W1_an, grad_W2_an, _ = compute_policy_gradient_one_step(state, W1, W2)
 
@@ -268,10 +313,10 @@ test_gradient(1e-6)
 
 # Train the agent
 num_episodes = 100000
-max_episode_length = 2000
-initial_step_size = 1e-4
+max_episode_length = 100000
+initial_step_size = 1e-3
 W1, W2 = train_policy_gradient_agent(num_episodes, max_episode_length,
-        initial_step_size, True)
+        initial_step_size, num_hidden=10, render=False)
 
 # Run the agent for 10 episodes
 policy_gradient_agent(10, W1, W2, max_episode_length)
