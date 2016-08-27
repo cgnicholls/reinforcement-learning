@@ -26,7 +26,7 @@ def policy_gradient_agent(num_episodes, W1, W2, max_episode_length, render=True)
 # - initial_step_size: the initial step size. We decrease the step size
 # proportional to 1/n, where n is the episode number
 def train_policy_gradient_agent(num_episodes, max_episode_length,
-        initial_step_size, num_hidden=10, render=False, plot=False):
+        initial_step_size, batch_size=10, num_hidden=10, render=False, plot=False):
     # Initialise W1, W2
     height = 160
     width = 210
@@ -51,7 +51,7 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
         batch_rewards = []
         batch_actions = []
         batch_observations = []
-        for i_batch in range(10):
+        for i_batch in range(batch_size):
             # Run an episode with our current policy
             print("Running episode {}.{}".format(i_episode, i_batch))
             if i_batch == 0:
@@ -216,10 +216,20 @@ def compute_policy_gradient(episode_rewards, episode_actions,
         # for the current point, i.e. until one person misses the ball.
         reward = reward_for_this_point(episode_rewards)
 
+        discount = 0.9
+        reward = discounted_reward(episode_rewards[t::], discount)
+
         # Update the gradients by this reward
         grad_W1_log_pi += grad_W1 / (1e-8 + policy) * reward
         grad_W2_log_pi += grad_W2 / (1e-8 + policy) * reward
     return grad_W1_log_pi / episode_length, grad_W2_log_pi / episode_length
+
+def discounted_reward(rewards, discount):
+    reward = 0
+    for i in xrange(len(rewards)):
+        reward += rewards[i] * discount
+        discount *= discount
+    return reward
 
 # Takes a sequence of rewards for each time step, and computes the reward for
 # the current point. This is then next nonzero element, if it exists, and
@@ -316,7 +326,7 @@ num_episodes = 100000
 max_episode_length = 100000
 initial_step_size = 1e-3
 W1, W2 = train_policy_gradient_agent(num_episodes, max_episode_length,
-        initial_step_size, num_hidden=10, render=False)
+        initial_step_size, batch_size=2, num_hidden=10, render=False)
 
 # Run the agent for 10 episodes
 policy_gradient_agent(10, W1, W2, max_episode_length)
