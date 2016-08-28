@@ -26,10 +26,8 @@ def policy_gradient_agent(num_episodes, W1, W2, max_episode_length, render=True)
 # We then update theta in the direction of the gradient.
 # - num_episodes: the number of episodes to train for
 # - max_episode_length: the maximum length of an episode
-# - initial_step_size: the initial step size. We decrease the step size
-# proportional to 1/n, where n is the episode number
 def train_policy_gradient_agent(num_episodes, max_episode_length,
-        initial_step_size, batch_size=10, num_hidden=10, render=False, plot=False):
+        batch_size=10, num_hidden=10, render=False, plot=False):
     # Initialise W1, W2
     initial_std = 1e-3
     W1 = np.random.randn(num_hidden, 80*80) * initial_std
@@ -41,13 +39,11 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
         fig = plt.figure()
         ax1 = fig.add_subplot(1,1,1)
 
-    # Gradient ascent with velocity
+    # SGD with Adam
+    m1 = np.zeros(np.shape(W1))
     v1 = np.zeros(np.shape(W1))
+    m2 = np.zeros(np.shape(W2))
     v2 = np.zeros(np.shape(W2))
-
-    gamma = 0.5
-    step_size = initial_step_size
-
 
     show_state = False
     if show_state:
@@ -126,15 +122,28 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
         policy_gradient = compute_policy_gradient(batch_rewards,
                 batch_actions, batch_states, W1, W2)
 
-        # Vanilla gradient ascent
-        # We decrease the step size every 50th episode
-        if (i_episode % 50) == 49:
-            step_size /= 2
+        # Adam
+        beta1 = 0.9
+        beta2 = 0.999
+        adam_eps = 1e-8
+        adam_t = i_episode + 1
+        adam_eta = 0.001
 
-        v1 = gamma * v1 + step_size * policy_gradient[0]
-        v2 = gamma * v2 + step_size * policy_gradient[1]
-        W1 = W1 + v1
-        W2 = W2 + v2
+        # Update W1 with Adam
+        g1 = policy_gradient[0]
+        m1 = beta1 * m1 + (1-beta1) * g1
+        v1 = beta2 * v1 + (1-beta2) * g1**2
+        m1hat = m1 / (1-beta1**adam_t)
+        v1hat = v1 / (1-beta2**adam_t)
+        W1 = W1 + adam_eta * m1hat / (np.sqrt(v1hat) + adam_eps)
+
+        # Update W2 with Adam
+        g2 = policy_gradient[1]
+        m2 = beta1 * m2 + (1-beta1) * g2
+        v2 = beta2 * v2 + (1-beta2) * g2**2
+        m2hat = m2 / (1-beta1**adam_t)
+        v2hat = v2 / (1-beta2**adam_t)
+        W2 = W2 + adam_eta * m2hat / (np.sqrt(v2hat) + adam_eps)
 
     # Return our trained theta
     return W1, W2
@@ -403,9 +412,8 @@ test_gradient(1e-6)
 # Train the agent
 num_episodes = 100000
 max_episode_length = 2000
-initial_step_size = 1e-3
 W1, W2 = train_policy_gradient_agent(num_episodes, max_episode_length,
-        initial_step_size, batch_size=100, num_hidden=10, render=False)
+        batch_size=10, num_hidden=200, render=False)
 
 # Run the agent for 10 episodes
 policy_gradient_agent(10, W1, W2, max_episode_length)
