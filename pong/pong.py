@@ -59,6 +59,7 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
         batch_actions = []
         batch_states = []
         batch_length = 0
+        batch_results = []
         for i_batch in range(batch_size):
             # Run an episode with our current policy
             if i_batch == 0:
@@ -79,11 +80,14 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
             lost = len(rewards[rewards == -1])
             print("Episode {}.{}   AI: {} - {} : RL".format(i_episode, i_batch,
                 lost, won))
+            batch_results += [[lost, won]]
 
         print("Average episode length: {}".format(float(batch_length) /
             batch_size))
+        mean_batch_results = np.mean(batch_results, 0)
+        print("Average episode score: {}".format(mean_batch_results))
 
-        win_history.append([won, lost])
+        win_history.append(mean_batch_results)
         if (i_episode % 10) == 0:
             f = open('rewards.pkl', 'wb')
             pickle.dump(win_history, f)
@@ -221,6 +225,13 @@ def compute_policy_gradient(episode_rewards, episode_actions,
 
     episode_length = len(episode_rewards)
 
+    # Normalizes the positive and negative rewards
+    normalized_rewards = normalize_rewards(episode_rewards)
+    end_points = [t for t in xrange(len(episode_rewards)) if \
+            episode_rewards[t]  != 0]
+    normalized_rewards = propagate_reward_for_point(normalized_rewards,
+            end_points)
+
     for t in xrange(episode_length):
         state = episode_states[t]
         grad_W1, grad_W2, policy = compute_policy_gradient_one_step(state, W1,
@@ -234,9 +245,10 @@ def compute_policy_gradient(episode_rewards, episode_actions,
             grad_W2 = -grad_W2
             policy = 1-policy
 
-        # Try putting the reward as the next nonzero reward. This is the reward
-        # for the current point, i.e. until one person misses the ball.
-        reward = reward_for_this_point(episode_rewards[t::])
+        # Set the reward for time t as the next nonzero reward. This is the
+        # reward for the current point, i.e. until one person misses the ball.
+        #reward = reward_for_this_point(episode_rewards[t::])
+        reward = normalized_rewards[t]
 
         #discount = 0.9
         #reward = discounted_reward(episode_rewards[t::], discount)
@@ -245,6 +257,33 @@ def compute_policy_gradient(episode_rewards, episode_actions,
         grad_W1_log_pi += grad_W1 / (1e-8 + policy) * reward
         grad_W2_log_pi += grad_W2 / (1e-8 + policy) * reward
     return grad_W1_log_pi / episode_length, grad_W2_log_pi / episode_length
+
+# Given rewards for all timesteps in pong, transform them to have mean zero and
+# standard deviation one.
+def normalize_rewards(rewards):
+    rewards = np.array(rewards)
+    rewards[rewards!=0] -= np.mean(rewards[rewards!=0])
+    std = np.std(rewards[rewards!=0])
+    if std != np.nan:
+        rewards[rewards!=0] /= np.std(rewards[rewards!=0])
+    return rewards
+    
+# Given end points for each point, copy the reward for the point back to all
+# timesteps in the point
+def propagate_reward_for_point(rewards, end_points):
+    i_end_point = 0
+    for i in xrange(len(rewards)):
+        # If no more end points, then return
+        if i_end_point >= len(end_points):
+            return rewards
+        # If we have not reached the end of the point, set the reward as the
+        # reward for the point
+        if i <= end_points[i_end_point]:
+            rewards[i] = rewards[end_points[i_end_point]]
+        # Otherwise, we increment the end point
+        else:
+            i_end_point += 1
+    return rewards
 
 def discounted_reward(rewards, discount):
     reward = 0
@@ -260,7 +299,7 @@ def reward_for_this_point(rewards):
     for i in xrange(len(rewards)):
         if rewards[i] != 0:
             if rewards[i] == 1:
-                return 10
+                return 1
             else:
                 return -1
     return 0
@@ -294,7 +333,7 @@ def run_episode(W1, W2, max_episode_length, render=False):
         episode_rewards.append(reward)
         if done:
             break
-    episode_length = t
+    episode_length = t+1
     return episode_rewards, episode_actions, episode_states, episode_length
 
 def compute_state(episode_observations):
@@ -363,10 +402,10 @@ test_gradient(1e-6)
 
 # Train the agent
 num_episodes = 100000
-max_episode_length = 100000
+max_episode_length = 2000
 initial_step_size = 1e-3
 W1, W2 = train_policy_gradient_agent(num_episodes, max_episode_length,
-        initial_step_size, batch_size=5, num_hidden=10, render=False)
+        initial_step_size, batch_size=100, num_hidden=10, render=False)
 
 # Run the agent for 10 episodes
 policy_gradient_agent(10, W1, W2, max_episode_length)
