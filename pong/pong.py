@@ -9,13 +9,16 @@ import matplotlib.pyplot as plt
 import pickle
 env = gym.make('Pong-v0')
 
+MOVE_UP = 2
+MOVE_DOWN = 3
+
 # Play with policy gradient agent, with given parameter vector
 # - num_episodes: the number of episodes to run the agent
 # - theta: the parameter to use for the policy
 # - max_episode_length: the maximum length of an episode
 def policy_gradient_agent(num_episodes, W1, W2, max_episode_length, render=True):
     for i_episode in range(num_episodes):
-        episode_rewards, _, _ = run_episode(W1, W2, max_episode_length, render)
+        episode_rewards, _, _, _ = run_episode(W1, W2, max_episode_length, render)
         print("Reward for episode:", sum(episode_rewards))
 
 # Train an agent using policy gradients. Each episode, we sample a trajectory,
@@ -28,10 +31,8 @@ def policy_gradient_agent(num_episodes, W1, W2, max_episode_length, render=True)
 def train_policy_gradient_agent(num_episodes, max_episode_length,
         initial_step_size, batch_size=10, num_hidden=10, render=False, plot=False):
     # Initialise W1, W2
-    height = 160
-    width = 210
     initial_std = 1e-3
-    W1 = np.random.randn(num_hidden, width*height) * initial_std
+    W1 = np.random.randn(num_hidden, 80*80) * initial_std
     W2 = np.random.randn(1, num_hidden) * initial_std
 
     win_history = []
@@ -47,36 +48,46 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
     gamma = 0.5
     step_size = initial_step_size
 
+
+    show_state = False
+    if show_state:
+        plt.ion()
+        f, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, sharex='col', sharey='row')
+
     for i_episode in range(num_episodes):
         batch_rewards = []
         batch_actions = []
-        batch_observations = []
+        batch_states = []
+        batch_length = 0
         for i_batch in range(batch_size):
             # Run an episode with our current policy
-            print("Running episode {}.{}".format(i_episode, i_batch))
             if i_batch == 0:
                 render_episode = render
             else:
                 render_episode = False
-            episode_rewards, episode_actions, episode_observations = \
-            run_episode(W1, W2, max_episode_length, render_episode)
+            episode_rewards, episode_actions, episode_states, episode_length = \
+                    run_episode(W1, W2, max_episode_length, render_episode)
 
             batch_rewards += episode_rewards
             batch_actions += episode_actions
-            batch_observations += episode_observations
+            batch_states += episode_states
+            batch_length += episode_length
 
             # Output episode rewards
             rewards = np.array(episode_rewards)
             won = len(rewards[rewards == 1])
             lost = len(rewards[rewards == -1])
-            print("AI: {} - {} : RL".format(lost, won))
+            print("Episode {}.{}   AI: {} - {} : RL".format(i_episode, i_batch,
+                lost, won))
 
-            win_history.append([won, lost])
-            if (i_episode % 10) == 0:
-                print("Writing scores")
-                f = open('rewards.pkl', 'wb')
-                pickle.dump(win_history, f)
-                f.close()
+        print("Average episode length: {}".format(float(batch_length) /
+            batch_size))
+
+        win_history.append([won, lost])
+        if (i_episode % 10) == 0:
+            f = open('rewards.pkl', 'wb')
+            pickle.dump(win_history, f)
+            f.close()
 
         # Write W1, W2 to file every 10th batch
         if (i_episode % 10) == 0:
@@ -91,10 +102,25 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
             ax1.plot(win_history)
             plt.pause(0.0001) 
 
+        if show_state:
+            state_to_show = np.reshape(batch_states[30], (80, 80))
+            ax1.clear()
+            ax1.imshow(state_to_show)
+            state_to_show = np.reshape(batch_states[35], (80, 80))
+            ax2.clear()
+            ax2.imshow(state_to_show)
+            state_to_show = np.reshape(batch_states[40], (80, 80))
+            ax3.clear()
+            ax3.imshow(state_to_show)
+            state_to_show = np.reshape(batch_states[45], (80, 80))
+            ax4.clear()
+            ax4.imshow(state_to_show)
+            plt.pause(0.0001)
+
         # Compute the policy gradient for this trajectory
         print("Computing gradients")
         policy_gradient = compute_policy_gradient(batch_rewards,
-                batch_actions, batch_observations, W1, W2)
+                batch_actions, batch_states, W1, W2)
 
         # Vanilla gradient ascent
         # We decrease the step size every 50th episode
@@ -113,10 +139,6 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
 # We want to find theta such that observation . theta > 0 is a good predictor
 # for the 'move right' action.
 def compute_policy(state, W1, W2):
-    # We first make the screen grayscale, and reshape to get a vector
-    state = np.mean(state, 2)
-    state = np.reshape(state, (-1, 1))
-
     # Compute first fully connected layer
     fc1 = np.dot(W1, state)
 
@@ -135,13 +157,13 @@ def compute_policy(state, W1, W2):
 # theta: the parameter vector theta
 # Returns: a sample from the policy distribution. The distribution is: move
 # right with probability sigma(x dot theta), and otherwise move left.
-def sample_action(observation, W1, W2):
-    prob_up = compute_policy(observation, W1, W2)[-1]
+def sample_action(state, W1, W2):
+    prob_up = compute_policy(state, W1, W2)[-1]
     r = np.random.rand()
     if r < prob_up:
-        return 2
+        return MOVE_UP
     else:
-        return 3
+        return MOVE_DOWN
 
 # Computes the sigmoid function
 # u: a real number
@@ -188,10 +210,10 @@ def compute_policy_gradient_one_step(state, W1, W2):
 # the specified trajectory.
 # - episode_rewards: the rewards of the episode
 # - episode_actions: the actions of the episode
-# - episode_observations: the observations of the episode
-# - theta: the parameter for the policy that ran the episode
+# - episode_states: the states of the episode
+# - W1, W2: the parameters for the policy that ran the episode
 def compute_policy_gradient(episode_rewards, episode_actions,
-        episode_observations, W1, W2):
+        episode_states, W1, W2):
     # The gradient computation is explained at https://cgnicholls.github.io
 
     grad_W1_log_pi = np.zeros(np.shape(W1))
@@ -200,24 +222,24 @@ def compute_policy_gradient(episode_rewards, episode_actions,
     episode_length = len(episode_rewards)
 
     for t in xrange(episode_length):
-        state = episode_observations[t]
+        state = episode_states[t]
         grad_W1, grad_W2, policy = compute_policy_gradient_one_step(state, W1,
                 W2)
         
         # Above, we've computed the gradient for going up. But if we actually
         # went down on this action, then we should compute grad log (1-pi),
         # which is (grad (1-pi)) / (1-pi) = -(grad pi) / (1-pi).
-        if episode_actions[t] == 3:
+        if episode_actions[t] == MOVE_DOWN:
             grad_W1 = -grad_W1
             grad_W2 = -grad_W2
             policy = 1-policy
 
         # Try putting the reward as the next nonzero reward. This is the reward
         # for the current point, i.e. until one person misses the ball.
-        reward = reward_for_this_point(episode_rewards)
+        reward = reward_for_this_point(episode_rewards[t::])
 
-        discount = 0.9
-        reward = discounted_reward(episode_rewards[t::], discount)
+        #discount = 0.9
+        #reward = discounted_reward(episode_rewards[t::], discount)
 
         # Update the gradients by this reward
         grad_W1_log_pi += grad_W1 / (1e-8 + policy) * reward
@@ -237,7 +259,10 @@ def discounted_reward(rewards, discount):
 def reward_for_this_point(rewards):
     for i in xrange(len(rewards)):
         if rewards[i] != 0:
-            return rewards[i]
+            if rewards[i] == 1:
+                return 10
+            else:
+                return -1
     return 0
 
 # Run an episode with the policy parametrised by theta.
@@ -251,7 +276,7 @@ def run_episode(W1, W2, max_episode_length, render=False):
     episode_rewards = []
     episode_actions = []
     episode_observations = []
-    episode_observations.append(observation)
+    episode_states = []
     
     for t in xrange(max_episode_length):
         episode_observations.append(observation)
@@ -260,10 +285,8 @@ def run_episode(W1, W2, max_episode_length, render=False):
             env.render()
 
         # Set up the state
-        if t > 0:
-            state = episode_observations[t] - episode_observations[t-1]
-        else:
-            state = np.zeros(np.shape(episode_observations[0]))
+        state = compute_state(episode_observations)
+        episode_states.append(state)
 
         a_t = sample_action(state, W1, W2)
         episode_actions.append(a_t)
@@ -271,9 +294,27 @@ def run_episode(W1, W2, max_episode_length, render=False):
         episode_rewards.append(reward)
         if done:
             break
-    return episode_rewards, episode_actions, episode_observations
+    episode_length = t
+    return episode_rewards, episode_actions, episode_states, episode_length
+
+def compute_state(episode_observations):
+    t = len(episode_observations)-1
+    if t > 0:
+        state = episode_observations[t] - episode_observations[t-1]
+    else:
+        state = np.zeros(np.shape(episode_observations[0]))
+    state = state[34:194,:,:]
+    state = np.mean(state, 2)
+
+    # Resize state
+    state = state[::2,::2]
+
+    # Return state as a vector
+    state = np.reshape(state, (-1, 1))
+    return state
 
 def numerical_gradient(state, W1, W2, eps):
+    state = np.reshape(state, (-1, 1))
     grad_W1 = np.zeros(np.shape(W1))
     for i in xrange(np.shape(W1)[0]):
         for j in xrange(np.shape(W1)[1]):
@@ -298,11 +339,10 @@ def numerical_gradient(state, W1, W2, eps):
 
 # Test gradients
 def test_gradient(eps):
-    height = 21
-    width = 20
-    state = np.random.randn(height, width, 3)
+    num_input = 100
+    state = np.random.randn(num_input, 1)
     num_hidden = 2
-    W1 = np.random.randn(num_hidden, height*width) * 0.1
+    W1 = np.random.randn(num_hidden, num_input) * 0.1
     W2 = np.random.randn(1, num_hidden) * 0.1
     grad_W1_num, grad_W2_num = numerical_gradient(state, W1, W2, eps)
     grad_W1_an, grad_W2_an, _ = compute_policy_gradient_one_step(state, W1, W2)
@@ -326,7 +366,7 @@ num_episodes = 100000
 max_episode_length = 100000
 initial_step_size = 1e-3
 W1, W2 = train_policy_gradient_agent(num_episodes, max_episode_length,
-        initial_step_size, batch_size=2, num_hidden=10, render=False)
+        initial_step_size, batch_size=5, num_hidden=10, render=False)
 
 # Run the agent for 10 episodes
 policy_gradient_agent(10, W1, W2, max_episode_length)
