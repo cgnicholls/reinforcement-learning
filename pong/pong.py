@@ -7,6 +7,7 @@ import random
 import gym
 import matplotlib.pyplot as plt
 import pickle
+import sys
 env = gym.make('Pong-v0')
 
 MOVE_UP = 2
@@ -29,9 +30,8 @@ def policy_gradient_agent(num_episodes, W1, W2, max_episode_length, render=True)
 def train_policy_gradient_agent(num_episodes, max_episode_length,
         batch_size=10, num_hidden=10, render=False, plot=False):
     # Initialise W1, W2
-    initial_std = 1e-3
-    W1 = np.random.randn(num_hidden, 80*80) * initial_std
-    W2 = np.random.randn(1, num_hidden) * initial_std
+    W1 = initialise_weights(80*80, num_hidden)
+    W2 = initialise_weights(num_hidden, 1)
 
     win_history = []
     if plot:
@@ -148,6 +148,12 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
     # Return our trained theta
     return W1, W2
 
+# Initialises weights for a feed forward neural network as described in
+# Efficient Backprop
+def initialise_weights(num_input, num_output):
+    initial_std = 1e-3/np.sqrt(num_input)
+    return np.random.randn(num_output, num_input) * initial_std
+
 # observation and theta are both row vectors.
 # We want to find theta such that observation . theta > 0 is a good predictor
 # for the 'move right' action.
@@ -242,6 +248,9 @@ def compute_policy_gradient(episode_rewards, episode_actions,
             end_points)
 
     for t in xrange(episode_length):
+        sys.stdout.write("Progress: %d%%   \r" % int(100*float(t+1) / \
+                float(episode_length)) )
+        sys.stdout.flush()
         state = episode_states[t]
         grad_W1, grad_W2, policy = compute_policy_gradient_one_step(state, W1,
                 W2)
@@ -272,9 +281,9 @@ def compute_policy_gradient(episode_rewards, episode_actions,
 def normalize_rewards(rewards):
     rewards = np.array(rewards)
     rewards[rewards!=0] -= np.mean(rewards[rewards!=0])
-    std = np.std(rewards[rewards!=0])
-    if std != np.nan:
-        rewards[rewards!=0] /= np.std(rewards[rewards!=0])
+    #std = np.std(rewards[rewards!=0])
+    #if std != np.nan:
+    #    rewards[rewards!=0] /= np.std(rewards[rewards!=0])
     return rewards
     
 # Given end points for each point, copy the reward for the point back to all
@@ -386,19 +395,29 @@ def numerical_gradient(state, W1, W2, eps):
     return grad_W1, grad_W2
 
 # Test gradients
-def test_gradient(eps):
-    num_input = 100
-    state = np.random.randn(num_input, 1)
-    num_hidden = 2
-    W1 = np.random.randn(num_hidden, num_input) * 0.1
-    W2 = np.random.randn(1, num_hidden) * 0.1
+def test_gradient_specific(eps, state, W1, W2):
     grad_W1_num, grad_W2_num = numerical_gradient(state, W1, W2, eps)
     grad_W1_an, grad_W2_an, _ = compute_policy_gradient_one_step(state, W1, W2)
 
     relative_error_W1 = relative_error(grad_W1_num, grad_W1_an, eps)
     relative_error_W2 = relative_error(grad_W2_num, grad_W2_an, eps)
-    print("Relative error W1: {}".format(relative_error_W1))
-    print("Relative error W2: {}".format(relative_error_W2))
+    return [relative_error_W1, relative_error_W2]
+
+def test_gradient(eps, num_input=100, num_hidden=20, num_tests=10):
+    max_relative_error_W1 = 0
+    max_relative_error_W2 = 0
+
+    for i in xrange(num_tests):
+        state = np.random.randn(num_input, 1)
+        W1 = np.random.randn(num_hidden, num_input) * 0.1
+        W2 = np.random.randn(1, num_hidden) * 0.1
+        [relative_error_W1, relative_error_W2] = test_gradient_specific(eps, state,
+                W1, W2)
+        max_relative_error_W1 = np.max([max_relative_error_W1,
+            relative_error_W1])
+        max_relative_error_W2 = np.max([max_relative_error_W2,
+            relative_error_W2])
+    return [max_relative_error_W1, max_relative_error_W2]
 
 def relative_error(arr1, arr2, eps):
     abs_error = np.sum(np.abs(np.reshape(arr1 - arr2, (1,-1))))
@@ -407,13 +426,16 @@ def relative_error(arr1, arr2, eps):
     return abs_error / min(1e-20 + norm1, 1e-20 + norm2)
 
 # Test the gradients numerically
-test_gradient(1e-6)
+print("Testing gradients")
+[max_relative_error_W1, max_relative_error_W2] = test_gradient(1e-6)
+print("Max rel error W1 {}".format(max_relative_error_W1))
+print("Max rel error W2 {}".format(max_relative_error_W2))
 
 # Train the agent
 num_episodes = 100000
 max_episode_length = 2000
 W1, W2 = train_policy_gradient_agent(num_episodes, max_episode_length,
-        batch_size=10, num_hidden=200, render=False)
+        batch_size=10, num_hidden=20, render=False)
 
 # Run the agent for 10 episodes
 policy_gradient_agent(10, W1, W2, max_episode_length)
