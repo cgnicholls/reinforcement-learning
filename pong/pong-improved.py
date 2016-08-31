@@ -1,6 +1,7 @@
 # coding: utf-8
 
-# This code works using a vanilla version of the policy-gradient method. 
+# This code works using the policy-gradient method with some of Karpathy's
+# tricks. 
 
 import numpy as np
 import random
@@ -19,7 +20,8 @@ MOVE_DOWN = 3
 # - max_episode_length: the maximum length of an episode
 def policy_gradient_agent(num_episodes, W1, W2, max_episode_length, render=True):
     for i_episode in range(num_episodes):
-        episode_rewards, _, _, _ = run_episode(W1, W2, max_episode_length, render)
+        episode_rewards, _, _, _, _ = run_episode(W1, W2, max_episode_length,
+                render) 
         print("Reward for episode:", sum(episode_rewards))
 
 # Train an agent using policy gradients. Each episode, we sample a trajectory,
@@ -63,7 +65,7 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
             else:
                 render_episode = False
             episode_rewards, episode_actions, episode_states, episode_length = \
-                    run_episode(W1, W2, max_episode_length, render_episode)
+            run_episode(W1, W2, max_episode_length, render_episode)
 
             batch_rewards += episode_rewards
             batch_actions += episode_actions
@@ -119,8 +121,8 @@ def train_policy_gradient_agent(num_episodes, max_episode_length,
 
         # Compute the policy gradient for this trajectory
         print("Computing gradients")
-        policy_gradient = compute_policy_gradient(batch_rewards,
-                batch_actions, batch_states, W1, W2)
+        policy_gradient = compute_policy_gradient(batch_rewards, batch_actions,
+                batch_states, W1, W2)
 
         # Adam
         beta1 = 0.9
@@ -154,23 +156,6 @@ def initialise_weights(num_input, num_output):
     initial_std = 1e-3/np.sqrt(num_input)
     return np.random.randn(num_output, num_input) * initial_std
 
-# observation and theta are both row vectors.
-# We want to find theta such that observation . theta > 0 is a good predictor
-# for the 'move right' action.
-def policy_forward(state, W1, W2):
-    # Compute first fully connected layer
-    fc1 = np.dot(W1, state)
-
-    # Apply relu
-    relu1 = np.copy(fc1)
-    relu1[relu1 < 0] = 0
-    
-    # Compute second fully connected layer
-    fc2 = np.dot(W2, relu1)
-
-    # Return the layer outputs
-    return [state, fc1, relu1, fc2, sigmoid(fc2)]
-
 # Samples an action from the policy
 # observation: an observation from the environment
 # theta: the parameter vector theta
@@ -191,39 +176,40 @@ def sigmoid(u):
     u = np.max([u, -500])
     return 1.0 / (1.0 + np.exp(-u))
 
-# Computes the gradient of pi with respect to W1 and W2. Note that pi is the
-# probability of moving up.
-def compute_policy_gradient_one_step(state, W1, W2):
-    layer_outputs = policy_forward(state, W1, W2)
-    state = layer_outputs[0]
-    fc1 = layer_outputs[1]
-    relu1 = layer_outputs[2]
-    fc2 = layer_outputs[3]
-    softmax = layer_outputs[4]
+# observation and theta are both row vectors.
+# We want to find theta such that observation . theta > 0 is a good predictor
+# for the 'move right' action.
+def policy_forward(state, W1, W2):
+    # Compute hidden layer outputs
+    hidden = np.dot(W1, state)
 
-    dpi_dfc2 = softmax * (1-softmax)
+    # Apply relu
+    hidden[hidden < 0] = 0
+    
+    # Compute second fully connected layer
+    logit = np.dot(W2, hidden)
 
-    dfc2_drelu1 = np.transpose(W2)
+    # Apply sigmoid
+    pi = sigmoid(logit)
+    return [hidden, pi]
 
-    dpi_drelu1 = dpi_dfc2 * dfc2_drelu1
-
-    # We can now compute dpi_dW2
-    dfc2_dW2 = np.transpose(relu1)
-    dpi_dW2 = dpi_dfc2 * dfc2_dW2
-
-    # Move on to dpi_dW1. First keep backpropagating.
-    drelu1_dfc1 = np.ones(np.shape(fc1))
-    drelu1_dfc1[fc1 < 0] = 0
-    dpi_dfc1 = dpi_drelu1 * drelu1_dfc1
+# Computes the gradient of some function with respect to W1 and W2. 'dvar' means
+# d f / d var. We pass in dlogit, which is df / dlogit, where pi =
+# sigmoid(logit).
+def policy_backward(state, hidden, dlogit, W1, W2):
+    dW2 = dlogit * np.transpose(hidden)
+    dhidden = dlogit * np.transpose(W2)
+    
+    # Backprop through relu
+    dhidden[hidden <= 0] = 0
 
     # The (i,j,k) entry of dfc1_dW1 is d(fc1)_i / d(W1)_jk.
-    dfc1_dW1 = np.zeros((np.shape(fc1)[0], np.shape(W1)[0], np.shape(W1)[1]))
-    for i in xrange(np.shape(fc1)[0]):
-        dfc1_dW1[i,i,:] = np.transpose(state)
-    dpi_dW1 = np.tensordot(dpi_dfc1, dfc1_dW1, axes=(0,0))
-    dpi_dW1 = np.reshape(dpi_dW1, np.shape(W1))
-
-    return dpi_dW1, dpi_dW2, softmax
+    dh_dW1 = np.zeros((np.shape(hidden)[0], np.shape(W1)[0], np.shape(W1)[1]))
+    for i in xrange(np.shape(hidden)[0]):
+        dh_dW1[i,i,:] = np.transpose(state)
+    dW1 = np.tensordot(dhidden, dh_dW1, axes=(0,0))
+    dW1 = np.reshape(dW1, np.shape(W1))
+    return [dW1, dW2]
 
 # This function computes the gradient of the policy with respect to theta for
 # the specified trajectory.
@@ -240,40 +226,34 @@ def compute_policy_gradient(episode_rewards, episode_actions,
 
     episode_length = len(episode_rewards)
 
+    discount = 0.99
+    rewards = discounted_rewards(episode_rewards, discount)
+    rewards = normalize_rewards(rewards)
+
     # Normalizes the positive and negative rewards
     normalized_rewards = normalize_rewards(episode_rewards)
-    end_points = [t for t in xrange(len(episode_rewards)) if \
-            episode_rewards[t]  != 0]
-    normalized_rewards = propagate_reward_for_point(normalized_rewards,
-            end_points)
 
     for t in xrange(episode_length):
         sys.stdout.write("Progress: %d%%   \r" % int(100*float(t+1) / \
                 float(episode_length)) )
         sys.stdout.flush()
         state = episode_states[t]
-        grad_W1, grad_W2, policy = compute_policy_gradient_one_step(state, W1,
-                W2)
-        
-        # Above, we've computed the gradient for going up. But if we actually
-        # went down on this action, then we should compute grad log (1-pi),
-        # which is (grad (1-pi)) / (1-pi) = -(grad pi) / (1-pi).
-        if episode_actions[t] == MOVE_DOWN:
-            grad_W1 = -grad_W1
-            grad_W2 = -grad_W2
-            policy = 1-policy
 
+        hidden_t, pi_t = policy_forward(state, W1, W2)
+        a_t = episode_actions[t]
+        dlogit_t = 1 - pi_t if a_t == MOVE_UP else 0 - pi_t
+        
+        grad_W1, grad_W2 = policy_backward(state, hidden_t, dlogit_t,
+                W1, W2)
+        
         # Set the reward for time t as the next nonzero reward. This is the
         # reward for the current point, i.e. until one person misses the ball.
         #reward = reward_for_this_point(episode_rewards[t::])
         reward = normalized_rewards[t]
 
-        #discount = 0.9
-        #reward = discounted_reward(episode_rewards[t::], discount)
-
         # Update the gradients by this reward
-        grad_W1_log_pi += grad_W1 / (1e-8 + policy) * reward
-        grad_W2_log_pi += grad_W2 / (1e-8 + policy) * reward
+        grad_W1_log_pi += grad_W1 * reward
+        grad_W2_log_pi += grad_W2 * reward
     return grad_W1_log_pi / episode_length, grad_W2_log_pi / episode_length
 
 # Given rewards for all timesteps in pong, transform them to have mean zero and
@@ -281,46 +261,21 @@ def compute_policy_gradient(episode_rewards, episode_actions,
 def normalize_rewards(rewards):
     rewards = np.array(rewards)
     rewards[rewards!=0] -= np.mean(rewards[rewards!=0])
-    #std = np.std(rewards[rewards!=0])
-    #if std != np.nan:
-    #    rewards[rewards!=0] /= np.std(rewards[rewards!=0])
+    std = np.std(rewards[rewards!=0])
+    if std != np.nan:
+        rewards[rewards!=0] /= np.std(rewards[rewards!=0])
     return rewards
     
-# Given end points for each point, copy the reward for the point back to all
-# timesteps in the point
-def propagate_reward_for_point(rewards, end_points):
-    i_end_point = 0
-    for i in xrange(len(rewards)):
-        # If no more end points, then return
-        if i_end_point >= len(end_points):
-            return rewards
-        # If we have not reached the end of the point, set the reward as the
-        # reward for the point
-        if i <= end_points[i_end_point]:
-            rewards[i] = rewards[end_points[i_end_point]]
-        # Otherwise, we increment the end point
-        else:
-            i_end_point += 1
-    return rewards
-
-def discounted_reward(rewards, discount):
-    reward = 0
-    for i in xrange(len(rewards)):
-        reward += rewards[i] * discount
-        discount *= discount
-    return reward
-
-# Takes a sequence of rewards for each time step, and computes the reward for
-# the current point. This is then next nonzero element, if it exists, and
-# otherwise zero.
-def reward_for_this_point(rewards):
-    for i in xrange(len(rewards)):
-        if rewards[i] != 0:
-            if rewards[i] == 1:
-                return 1
-            else:
-                return -1
-    return 0
+# Compute the discounted reward for each time step. That is, G_t = R_{t+1} +
+# discount * R_{t+2} + ... . But also break up the sequence into distinct
+# points, so we start again with the discount when we reach the end of a point.
+def discounted_rewards(rewards, discount):
+    discounted_rewards = np.copy(rewards)
+    running_total = 0
+    for t in reversed(xrange(0, len(rewards))):
+        if rewards[t] != 0: running_total = 0
+        discounted_rewards[t] = running_total * discount + rewards[t]
+    return discounted_rewards
 
 # Run an episode with the policy parametrised by theta.
 # - theta: the parameter to use for the policy
@@ -414,7 +369,9 @@ def numerical_gradient(state, W1, W2, eps):
 # Test gradients
 def test_gradient_specific(eps, state, W1, W2):
     grad_W1_num, grad_W2_num = numerical_gradient(state, W1, W2, eps)
-    grad_W1_an, grad_W2_an, _ = compute_policy_gradient_one_step(state, W1, W2)
+    hidden, pi = policy_forward(state, W1, W2)
+    grad_W1_an, grad_W2_an = policy_backward(state, hidden, pi * (1-pi), W1,
+            W2)
 
     relative_error_W1 = relative_error(grad_W1_num, grad_W1_an, eps)
     relative_error_W2 = relative_error(grad_W2_num, grad_W2_an, eps)
