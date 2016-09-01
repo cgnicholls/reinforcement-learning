@@ -119,8 +119,7 @@ def train_policy_gradient_agent(num_episodes, batch_size=10, num_hidden=10):
 # Initialises weights for a feed forward neural network as described in
 # Efficient Backprop
 def initialise_weights(num_input, num_output):
-    initial_std = 1e-3/np.sqrt(num_input)
-    return np.random.randn(num_output, num_input) * initial_std
+    return np.random.randn(num_output, num_input) / np.sqrt(num_input)
 
 # Samples an action from the policy
 # observation: an observation from the environment
@@ -182,9 +181,8 @@ def policy_backward(state, hidden, dlogit, W1, W2):
 def compute_policy_gradient(episode_rewards, episode_actions,
         episode_states, episode_hiddens, episode_pis, W1, W2):
     # The gradient computation is explained at https://cgnicholls.github.io
-
-    grad_W1_log_pi = np.zeros(np.shape(W1))
-    grad_W2_log_pi = np.zeros(np.shape(W2))
+    grad_W1_log_pi = np.zeros_like(W1)
+    grad_W2_log_pi = np.zeros_like(W2)
 
     episode_length = len(episode_rewards)
 
@@ -279,6 +277,7 @@ def run_episode(W1, W2, render=False):
 # Apply preprocessing to remove the game border, and downsample the frame. Also
 # zero out the background, and 
 def preprocessing(obs):
+    obs = obs.astype('float32')
     # Just keep the game screen -- not the score etc.
     # We also only need one colour channel
     obs = obs[35:194,:,0]
