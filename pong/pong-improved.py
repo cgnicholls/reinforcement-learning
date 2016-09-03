@@ -87,9 +87,8 @@ def train_policy_gradient_agent(num_episodes, batch_size=10, num_hidden=10):
 
         # Compute the policy gradient for this trajectory
         print("Computing gradients")
-        policy_gradients_W1, policy_gradients_W2 = \
-        compute_policy_gradient(batch_rewards, batch_actions, batch_states,
-                batch_hiddens, batch_pis, W1, W2)
+        policy_gradient = compute_policy_gradient(batch_rewards, batch_actions,
+                batch_states, batch_hiddens, batch_pis, W1, W2)
 
         # Adam
         beta1 = 0.9
@@ -99,22 +98,20 @@ def train_policy_gradient_agent(num_episodes, batch_size=10, num_hidden=10):
         adam_eta = 0.0001
 
         # Update W1 with Adam
-        print("Updating gradients")
-        for i in xrange(len(policy_gradients_W1)):
-            g1 = policy_gradients_W1[i]
-            m1 = beta1 * m1 + (1-beta1) * g1
-            v1 = beta2 * v1 + (1-beta2) * g1**2
-            m1hat = m1 / (1-beta1**adam_t)
-            v1hat = v1 / (1-beta2**adam_t)
-            W1 = W1 + adam_eta * m1hat / (np.sqrt(v1hat) + adam_eps)
+        g1 = policy_gradient[0]
+        m1 = beta1 * m1 + (1-beta1) * g1
+        v1 = beta2 * v1 + (1-beta2) * g1**2
+        m1hat = m1 / (1-beta1**adam_t)
+        v1hat = v1 / (1-beta2**adam_t)
+        W1 = W1 + adam_eta * m1hat / (np.sqrt(v1hat) + adam_eps)
 
-            # Update W2 with Adam
-            g2 = policy_gradients_W2[i]
-            m2 = beta1 * m2 + (1-beta1) * g2
-            v2 = beta2 * v2 + (1-beta2) * g2**2
-            m2hat = m2 / (1-beta1**adam_t)
-            v2hat = v2 / (1-beta2**adam_t)
-            W2 = W2 + adam_eta * m2hat / (np.sqrt(v2hat) + adam_eps)
+        # Update W2 with Adam
+        g2 = policy_gradient[1]
+        m2 = beta1 * m2 + (1-beta1) * g2
+        v2 = beta2 * v2 + (1-beta2) * g2**2
+        m2hat = m2 / (1-beta1**adam_t)
+        v2hat = v2 / (1-beta2**adam_t)
+        W2 = W2 + adam_eta * m2hat / (np.sqrt(v2hat) + adam_eps)
 
     # Return our trained theta
     return W1, W2
@@ -184,8 +181,8 @@ def policy_backward(state, hidden, dlogit, W1, W2):
 def compute_policy_gradient(episode_rewards, episode_actions,
         episode_states, episode_hiddens, episode_pis, W1, W2):
     # The gradient computation is explained at https://cgnicholls.github.io
-    grad_W1_log_pi = []
-    grad_W2_log_pi = []
+    grad_W1_log_pi = np.zeros_like(W1)
+    grad_W2_log_pi = np.zeros_like(W2)
 
     episode_length = len(episode_rewards)
 
@@ -214,8 +211,8 @@ def compute_policy_gradient(episode_rewards, episode_actions,
                 episode_hiddens[t], dlogits_weighted[t], W1, W2)
         
         # Update the gradients by this reward
-        grad_W1_log_pi.append(grad_W1)
-        grad_W2_log_pi.append(grad_W2)
+        grad_W1_log_pi += grad_W1
+        grad_W2_log_pi += grad_W2
     return grad_W1_log_pi, grad_W2_log_pi
 
 # Given rewards for all timesteps in pong, transform them to have mean zero and
