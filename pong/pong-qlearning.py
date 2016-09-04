@@ -47,6 +47,12 @@ DISCOUNT_FACTOR = 0.99
 # The number of rewards to compute the average with
 NUM_REWARDS_FOR_AVERAGE = 100
 
+# Take a checkpoint every SAVE_EVERY_STEPS
+SAVE_EVERY_STEPS = 10000
+
+# Output average Q value every VERBOSE_EVERY_STEPS
+VERBOSE_EVERY_STEPS = 10000
+
 # Initialise the q network
 def create_network():
     conv1_W = tf.Variable(tf.truncated_normal([8, 8, STATE_FRAMES, 32],
@@ -137,7 +143,9 @@ def compute_one_hot_actions(actions):
     return one_hot_actions
 
 # Deep Q-learning on pong
-def pong_deep_q_learn():
+def pong_deep_q_learn(restore_model="",
+        checkpoint_path="tensorflow_checkpoints"):
+
     # Create tensorflow session
     tf_sess = tf.Session()
 
@@ -165,16 +173,24 @@ def pong_deep_q_learn():
     epsilon_greedy = INITIAL_EPSILON_GREEDY
 
     observations = deque()
-    nonzero_rewards = deque()
     actions = []
+    avg_q_history = []
 
     # Set up plotting
-    plot = True
+    plot = False
     if plot:
         plt.ion()
         fig = plt.figure()
         ax1 = fig.add_subplot(1,1,1)
-        avg_q_history = []
+
+    # Set up checkpoints
+    saver = tf.train.Saver()
+
+    if restore_model != "":
+        checkpoint = tf.train.get_checkpoint_state(restore_model)
+        if checkpoint and checkpoint.model_checkpoint_path:
+            saver.restore(tf_sess, checkpoint.model_checkpoint_path)
+            print("Loaded checkpoints %s" % checkpoint.model_checkpoint_path)
 
     env = gym.make('Pong-v0')
     obs = env.reset()
@@ -197,16 +213,21 @@ def pong_deep_q_learn():
             benchmark_states = [d['state'] for d in benchmark_observations]
 
         # Compute the average q-value
-        if (t >= OBSERVATION_STEPS) and (t % 100 == 0):
+        if (t >= OBSERVATION_STEPS) and (t % VERBOSE_EVERY_STEPS == 0):
             avg_q_value = compute_average_q_value(tf_sess, tf_input_layer,
                     tf_output_layer, benchmark_states)
             print("Time: {}. Average Q-value: {}".format(t, avg_q_value))
+            avg_q_history.append(avg_q_value)
 
             if plot:
-                avg_q_history.append(avg_q_value)
                 ax1.clear()
                 ax1.plot(avg_q_history)
                 plt.pause(0.0001) 
+
+        # Save model every SAVE_EVERY_STEPS
+        if (t > 0) and (t % SAVE_EVERY_STEPS == 0):
+            saver.save(tf_sess, checkpoint_path + '/network_at_t_' + str(t),
+                    global_step=t)
 
         # Compute action
         if t % SKIP_ACTION == 0:
@@ -226,20 +247,6 @@ def pong_deep_q_learn():
         observations.append({'state': current_state, 'action':
             action, 'reward': reward, 'next_state': next_state,
             'terminal': terminal})
-
-        # Keep track of nonzero rewards so we can compute an average
-        if reward != 0:
-            nonzero_rewards.append(reward)
-
-        # Ensure we don't keep track of nonzero rewards for more than specified
-        if len(nonzero_rewards) > NUM_REWARDS_FOR_AVERAGE:
-            nonzero_rewards.popleft()
-
-#        # Print out rewards
-#        if ((t < OBSERVATION_STEPS) and (t % 10000 == 0)) or ((t >= \
-#            OBSERVATION_STEPS) and (t % 100 == 0)):
-#            if len(nonzero_rewards) > 0:
-#                print("Average reward: {}, time: {}".format(np.mean(nonzero_rewards), t))
 
         # Ensure we don't go over our memory size
         if len(observations) > MEMORY_SIZE:
