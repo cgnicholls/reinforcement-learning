@@ -36,16 +36,13 @@ INITIAL_EPSILON_GREEDY = 1.0 # Initial epsilon
 FINAL_EPSILON_GREEDY = 0.1 # Final epsilon
 
 OBSERVATION_STEPS = 50000 # Time steps to observe before training
-MEMORY_SIZE = 500000
+MEMORY_SIZE = 50000
 
 # The minibatch size to train with
 MINI_BATCH_SIZE = 32
 
 # The discount factor to use
 DISCOUNT_FACTOR = 0.99
-
-# The number of rewards to compute the average with
-NUM_REWARDS_FOR_AVERAGE = 100
 
 # Take a checkpoint every SAVE_EVERY_STEPS
 SAVE_EVERY_STEPS = 10000
@@ -253,7 +250,7 @@ def pong_deep_q_learn(restore_model="",
             observations.popleft()
 
         # Train if we have reached the number of observation steps
-        if len(observations) > OBSERVATION_STEPS:
+        if t >= OBSERVATION_STEPS:
             train(tf_sess, observations, tf_input_layer, tf_output_layer,
                     tf_train_operation, tf_action, tf_target)
     
