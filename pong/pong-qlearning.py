@@ -19,7 +19,10 @@ ACTIONS = [0,2,3]
 NUM_ACTIONS = len(ACTIONS)
 
 # The number of states to compute the average q value with
-BENCHMARK_STATES = 500
+BENCHMARK_STATES = 1000
+
+# The initial learning rate to use
+INITIAL_LEARNING_RATE = 1e-7
 
 # The number of frames to use as our state
 STATE_FRAMES = 4
@@ -36,7 +39,7 @@ INITIAL_EPSILON_GREEDY = 1.0 # Initial epsilon
 FINAL_EPSILON_GREEDY = 0.1 # Final epsilon
 
 OBSERVATION_STEPS = 50000 # Time steps to observe before training
-MEMORY_SIZE = 50000
+MEMORY_SIZE = 100000
 
 # The minibatch size to train with
 MINI_BATCH_SIZE = 32
@@ -163,7 +166,8 @@ def pong_deep_q_learn(restore_model="",
     tf_cost = tf.reduce_mean(tf.square(tf_target - tf_q_for_action))
 
     # The train operation: reduce the cost using RMSProp
-    tf_train_operation = tf.train.AdamOptimizer(1e-6).minimize(tf_cost)
+    tf_train_operation = \
+            tf.train.AdamOptimizer(INITIAL_LEARNING_RATE).minimize(tf_cost)
 
     tf_sess.run(tf.initialize_all_variables())
 
@@ -250,7 +254,7 @@ def pong_deep_q_learn(restore_model="",
             observations.popleft()
 
         # Train if we have reached the number of observation steps
-        if t >= OBSERVATION_STEPS:
+        if (t >= OBSERVATION_STEPS) and (t % SKIP_ACTION == 0):
             train(tf_sess, observations, tf_input_layer, tf_output_layer,
                     tf_train_operation, tf_action, tf_target)
     
@@ -296,12 +300,12 @@ def preprocess(obs):
     # Downsize screen
     obs = obs[::2,::2]
 
-#    # Erase background
-#    obs[obs == 144] = 0
-#    obs[obs == 109] = 0
+    # Erase background
+    obs[obs == 144] = 0
+    obs[obs == 109] = 0
 
     # Set everything else to 1
-#    obs[obs != 0] = 1
+    obs[obs != 0] = 1
     return obs
 
 # Compute the action predicted by the current parameters of the q network for
