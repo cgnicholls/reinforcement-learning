@@ -22,7 +22,7 @@ NUM_ACTIONS = len(ACTIONS)
 BENCHMARK_STATES = 1000
 
 # The initial learning rate to use
-INITIAL_LEARNING_RATE = 1e-7
+INITIAL_LEARNING_RATE = 1e-6
 
 # The number of frames to use as our state
 STATE_FRAMES = 4
@@ -176,6 +176,7 @@ def pong_deep_q_learn(restore_model="",
     observations = deque()
     actions = []
     avg_q_history = []
+    nonzero_rewards = deque()
 
     # Set up plotting
     plot = False
@@ -213,18 +214,6 @@ def pong_deep_q_learn(restore_model="",
                     BENCHMARK_STATES)
             benchmark_states = [d['state'] for d in benchmark_observations]
 
-        # Compute the average q-value
-        if (t >= OBSERVATION_STEPS) and (t % VERBOSE_EVERY_STEPS == 0):
-            avg_q_value = compute_average_q_value(tf_sess, tf_input_layer,
-                    tf_output_layer, benchmark_states)
-            print("Time: {}. Average Q-value: {}".format(t, avg_q_value))
-            avg_q_history.append(avg_q_value)
-
-            if plot:
-                ax1.clear()
-                ax1.plot(avg_q_history)
-                plt.pause(0.0001) 
-
         # Save model every SAVE_EVERY_STEPS
         if (t > 0) and (t % SAVE_EVERY_STEPS == 0):
             saver.save(tf_sess, checkpoint_path + '/network_at_t_' + str(t),
@@ -248,6 +237,25 @@ def pong_deep_q_learn(restore_model="",
         observations.append({'state': current_state, 'action':
             action, 'reward': reward, 'next_state': next_state,
             'terminal': terminal})
+
+        # Compute average reward
+        if reward != 0:
+            nonzero_rewards.append(reward)
+            if len(nonzero_rewards) > 500:
+                nonzero_rewards.popleft()
+            print("Average nonzero reward: {}".format(np.mean(nonzero_rewards)))
+
+        # Compute the average q-value
+        if (t >= OBSERVATION_STEPS) and (t % VERBOSE_EVERY_STEPS == 0):
+            avg_q_value = compute_average_q_value(tf_sess, tf_input_layer,
+                    tf_output_layer, benchmark_states)
+            print("Time: {}. Average Q-value: {}".format(t, avg_q_value))
+            avg_q_history.append(avg_q_value)
+
+            if plot:
+                ax1.clear()
+                ax1.plot(avg_q_history)
+                plt.pause(0.0001) 
 
         # Ensure we don't go over our memory size
         if len(observations) > MEMORY_SIZE:
