@@ -69,6 +69,8 @@ def sample_environment(sample_size, theta, epsilon):
             action = np.argmax(q)
         next_state, reward, terminal, info = env.step(action)
         next_state = np.array(next_state)
+        if terminal:
+            reward = 0.0
         samples.append({'current_state': current_state, 'action': action,
             'reward': reward, 'next_state': next_state, 'terminal': terminal})
         current_state = next_state
@@ -82,7 +84,7 @@ def sample_environment(sample_size, theta, epsilon):
     return samples, np.mean(lengths)
 
 # Train the Q-learning agent.
-def train_q_learning_agent(max_iterations, sample_size, step_size=1e-2,
+def train_q_learning_agent(max_iterations, sample_size, initial_step_size=1e-2,
         epsilon=0.9):
     # Initialise the parameter for q
     theta = initialise_q()
@@ -101,23 +103,23 @@ def train_q_learning_agent(max_iterations, sample_size, step_size=1e-2,
             losses.append(loss)
             dloss_dthetas.append(dloss_dtheta)
 
+        a = initial_step_size * 10.0
+        b = 10.0
+        step_size = a / (b+t)
+        epsilon -= 0.001
+        epsilon = max(epsilon, 0.05)
+
+        avg_dloss_dtheta = np.mean(dloss_dthetas, axis=0)
+        theta = theta - dloss_dtheta * step_size
+
         if t % 10 == 0:
             print("Average loss: {}".format(np.mean(losses)))
             print("Average reward: {}".format(avg_reward))
             print("Epsilon: {}".format(epsilon))
             print("Step size: {}".format(step_size))
-            estimated_reward = estimate_reward_with_theta(theta, 100, 10000)
+            estimated_reward = estimate_reward_with_theta(theta, 100, 1000)
             print("Estimated reward: {}".format(estimated_reward))
-
-        avg_dloss_dtheta = np.mean(dloss_dtheta)
-        theta = theta - avg_dloss_dtheta * step_size
-
-        a = 1e-2
-        b = 1
-        step_size = a / (b+t)
-        epsilon -= 0.001
-        epsilon = max(epsilon, 0.05)
-
+            
     return theta
 
 # Estimate the expected reward when following the policy determined by the
@@ -145,7 +147,7 @@ def estimate_reward_with_theta(theta, num_iters, max_episode_length,
     return np.mean(rewards)
 
 # Train using q-learning
-theta = train_q_learning_agent(1000, 10000)
+theta = train_q_learning_agent(10000, 5000)
 
 # Estimate the reward
 estimated_reward = estimate_reward_with_theta(theta, 100, 10000, True)
