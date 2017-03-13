@@ -1,8 +1,5 @@
 # coding: utf-8
 
-# This example follows
-# http://www.danielslater.net/2016/03/deep-q-learning-pong-with-tensorflow.html
-
 # We use q-learning. We approximate the q function with a neural network using
 # tensorflow.
 
@@ -13,13 +10,17 @@ import gym
 from collections import deque
 
 import matplotlib.pyplot as plt
+import time
 
 # Set up the action space
 ACTIONS = [0,2,3]
 NUM_ACTIONS = len(ACTIONS)
 
 # The number of states to compute the average q value with
-BENCHMARK_STATES = 1000
+BENCHMARK_STATES = 100
+
+# The number of nonzero rewards to compute the running average with
+NONZERO_REWARD_MEMORY = 500
 
 # The initial learning rate to use
 INITIAL_LEARNING_RATE = 1e-6
@@ -28,77 +29,28 @@ INITIAL_LEARNING_RATE = 1e-6
 STATE_FRAMES = 4
 
 # Take an action every SKIP_ACTION frames
-SKIP_ACTION = 4
+SKIP_ACTION = 1
 
 # The size to resize the frame to
 RESIZED_SCREEN_X, RESIZED_SCREEN_Y = 80, 80
 
 # Epsilon greedy
-EXPLORE_STEPS = 500000 # The total number of time steps to anneal epsilon
+EPSILON_GREEDY_STEPS = 100000 # The total number of time steps to anneal epsilon
 INITIAL_EPSILON_GREEDY = 1.0 # Initial epsilon
 FINAL_EPSILON_GREEDY = 0.1 # Final epsilon
 
-OBSERVATION_STEPS = 50000 # Time steps to observe before training
+# Observation period
+OBSERVATION_STEPS = 500 # Time steps to observe before training
 MEMORY_SIZE = 100000
 
 # The minibatch size to train with
-MINI_BATCH_SIZE = 32
+MINI_BATCH_SIZE = 100
 
 # The discount factor to use
 DISCOUNT_FACTOR = 0.99
 
-# Take a checkpoint every SAVE_EVERY_STEPS
-SAVE_EVERY_STEPS = 10000
-
 # Output average Q value every VERBOSE_EVERY_STEPS
-VERBOSE_EVERY_STEPS = 10000
-
-# Initialise the q network
-def create_network():
-    conv1_W = tf.Variable(tf.truncated_normal([8, 8, STATE_FRAMES, 32],
-        stddev=0.01))
-    conv1_b = tf.Variable(tf.constant(0.01, shape=[32]))
-
-    conv2_W = tf.Variable(tf.truncated_normal([4, 4, 32, 64], stddev=0.01))
-    conv2_b = tf.Variable(tf.constant(0.01, shape=[64]))
-
-    conv3_W = tf.Variable(tf.truncated_normal([3, 3, 64, 64], stddev=0.01))
-    conv3_b = tf.Variable(tf.constant(0.01, shape=[64]))
-
-    fc1_W = tf.Variable(tf.truncated_normal([256, 256], stddev=0.01))
-    fc1_b = tf.Variable(tf.constant(0.01, shape=[256]))
-    
-    fc2_W = tf.Variable(tf.truncated_normal([256, NUM_ACTIONS], stddev=0.01))
-    fc2_b = tf.Variable(tf.constant(0.01, shape=[NUM_ACTIONS]))
-
-    input_layer = tf.placeholder("float", [None, RESIZED_SCREEN_X,
-        RESIZED_SCREEN_Y, STATE_FRAMES])
-
-    conv1 = tf.nn.relu(tf.nn.conv2d(input_layer, conv1_W, strides=[1,4,4,1],
-        padding="SAME") + conv1_b)
-
-    max1 = tf.nn.max_pool(conv1, ksize=[1,2,2,1], strides=[1,2,2,1],
-            padding="SAME")
-
-    conv2 = tf.nn.relu(tf.nn.conv2d(max1, conv2_W, strides=[1,2,2,1],
-        padding="SAME") + conv2_b)
-
-    max2 = tf.nn.max_pool(conv2, ksize=[1,2,2,1], strides=[1,2,2,1],
-            padding="SAME")
-
-    conv3 = tf.nn.relu(tf.nn.conv2d(max2, conv3_W, strides=[1,1,1,1],
-        padding="SAME") + conv3_b)
-
-    max3 = tf.nn.max_pool(conv3, ksize=[1,2,2,1], strides=[1,2,2,1],
-            padding="SAME")
-
-    flatten = tf.reshape(max3, [-1, 256])
-
-    fc1 = tf.nn.relu(tf.matmul(flatten, fc1_W) + fc1_b)
-
-    output_layer = tf.matmul(fc1, fc2_W) + fc2_b
-
-    return input_layer, output_layer
+VERBOSE_EVERY_STEPS = 100
 
 # Train the agent
 def train(tf_sess, observations, tf_input_layer, tf_output_layer,
@@ -143,14 +95,13 @@ def compute_one_hot_actions(actions):
     return one_hot_actions
 
 # Deep Q-learning on pong
-def pong_deep_q_learn(restore_model="",
-        checkpoint_path="tensorflow_checkpoints"):
+def pong_deep_q_learn():
 
     # Create tensorflow session
     tf_sess = tf.Session()
 
     # Create tensorflow network
-    tf_input_layer, tf_output_layer = create_network()
+    tf_input_layer, tf_output_layer = create_network_deepmind()
 
     # A one-hot vector specifying the action
     tf_action = tf.placeholder("float", [None, NUM_ACTIONS])
@@ -159,23 +110,24 @@ def pong_deep_q_learn(restore_model="",
     tf_target = tf.placeholder("float", [None])
 
     # The q-value for the specified action, where tf_action is a one-hot vector.
-    tf_q_for_action = tf.reduce_sum(tf.mul(tf_output_layer, tf_action),
+    tf_q_for_action = tf.reduce_sum(tf_output_layer * tf_action,
             reduction_indices=1)
 
     # The cost we try to minimise, as in eqn 2 of the DQN paper
     tf_cost = tf.reduce_mean(tf.square(tf_target - tf_q_for_action))
 
-    # The train operation: reduce the cost using RMSProp
+    # The train operation: reduce the cost using Adam
     tf_train_operation = \
             tf.train.AdamOptimizer(INITIAL_LEARNING_RATE).minimize(tf_cost)
 
-    tf_sess.run(tf.initialize_all_variables())
+    tf_sess.run(tf.global_variables_initializer())
 
     epsilon_greedy = INITIAL_EPSILON_GREEDY
 
     observations = deque()
     actions = []
     avg_q_history = []
+    avg_reward_history = []
     nonzero_rewards = deque()
 
     # Set up plotting
@@ -185,14 +137,10 @@ def pong_deep_q_learn(restore_model="",
         fig = plt.figure()
         ax1 = fig.add_subplot(1,1,1)
 
-    # Set up checkpoints
-    saver = tf.train.Saver()
-
-    if restore_model != "":
-        checkpoint = tf.train.get_checkpoint_state(restore_model)
-        if checkpoint and checkpoint.model_checkpoint_path:
-            saver.restore(tf_sess, checkpoint.model_checkpoint_path)
-            print("Loaded checkpoints %s" % checkpoint.model_checkpoint_path)
+    # Give this run of the program an identifier
+    identifier = str(time.gmtime()[0:5])
+    identifier = identifier.replace('(', '').replace(')', '')
+    identifier = identifier.replace(' ', '-').replace(',','')
 
     env = gym.make('Pong-v0')
     obs = env.reset()
@@ -213,11 +161,6 @@ def pong_deep_q_learn(restore_model="",
             benchmark_observations = random.sample(observations,
                     BENCHMARK_STATES)
             benchmark_states = [d['state'] for d in benchmark_observations]
-
-        # Save model every SAVE_EVERY_STEPS
-        if (t > 0) and (t % SAVE_EVERY_STEPS == 0):
-            saver.save(tf_sess, checkpoint_path + '/network_at_t_' + str(t),
-                    global_step=t)
 
         # Compute action
         if t % SKIP_ACTION == 0:
@@ -241,16 +184,29 @@ def pong_deep_q_learn(restore_model="",
         # Compute average reward
         if reward != 0:
             nonzero_rewards.append(reward)
-            if len(nonzero_rewards) > 500:
+            if len(nonzero_rewards) > NONZERO_REWARD_MEMORY:
                 nonzero_rewards.popleft()
-            print("Average nonzero reward: {}".format(np.mean(nonzero_rewards)))
 
-        # Compute the average q-value
+        # Compute the average q-value, and display the average reward and
+        # average q-value
         if (t >= OBSERVATION_STEPS) and (t % VERBOSE_EVERY_STEPS == 0):
             avg_q_value = compute_average_q_value(tf_sess, tf_input_layer,
                     tf_output_layer, benchmark_states)
             print("Time: {}. Average Q-value: {}".format(t, avg_q_value))
             avg_q_history.append(avg_q_value)
+
+            print("Average nonzero reward: {}".format(np.mean(nonzero_rewards)))
+            avg_reward_history.append(np.mean(nonzero_rewards))
+
+            print("Epsilon: {}".format(epsilon_greedy))
+
+            # Plot the data, but don't show it
+            plot_data = np.append(np.array(avg_q_history)[:,np.newaxis],
+                    np.array(avg_reward_history)[:,np.newaxis], axis=1)
+
+            # Save the plot
+            plt.plot(plot_data)
+            plt.savefig("rewardhistory" + identifier + ".jpg")
 
             if plot:
                 ax1.clear()
@@ -270,13 +226,14 @@ def pong_deep_q_learn(restore_model="",
         if epsilon_greedy > FINAL_EPSILON_GREEDY and len(observations) > \
                 OBSERVATION_STEPS:
             epsilon_greedy -= (INITIAL_EPSILON_GREEDY - FINAL_EPSILON_GREEDY) \
-                    / EXPLORE_STEPS
+                    / EPSILON_GREEDY_STEPS
 
         # If terminal, then reset the environment
         if terminal:
             obs = env.reset()
             # Compute the first state again
             current_state = compute_state(None, obs)
+        # Otherwise, update current_state
         else:
             current_state = next_state
 
@@ -347,4 +304,98 @@ def compute_average_q_value(tf_sess, tf_input_layer, tf_output_layer, states):
 
     return avg_q_values
 
+# Initialise the q network
+def create_network():
+    conv1_W = tf.Variable(tf.truncated_normal([8, 8, STATE_FRAMES, 32],
+        stddev=0.01))
+    conv1_b = tf.Variable(tf.constant(0.1, shape=[32]))
+
+    conv2_W = tf.Variable(tf.truncated_normal([4, 4, 32, 64], stddev=0.1))
+    conv2_b = tf.Variable(tf.constant(0.1, shape=[64]))
+
+    conv3_W = tf.Variable(tf.truncated_normal([3, 3, 64, 64], stddev=0.1))
+    conv3_b = tf.Variable(tf.constant(0.1, shape=[64]))
+
+    fc1_W = tf.Variable(tf.truncated_normal([256, 256], stddev=0.1))
+    fc1_b = tf.Variable(tf.constant(0.1, shape=[256]))
+    
+    fc2_W = tf.Variable(tf.truncated_normal([256, NUM_ACTIONS], stddev=0.1))
+    fc2_b = tf.Variable(tf.constant(0.1, shape=[NUM_ACTIONS]))
+
+    input_layer = tf.placeholder("float", [None, RESIZED_SCREEN_X,
+        RESIZED_SCREEN_Y, STATE_FRAMES])
+
+    conv1 = tf.nn.relu(tf.nn.conv2d(input_layer, conv1_W, strides=[1,4,4,1],
+        padding="SAME") + conv1_b)
+
+    max1 = tf.nn.max_pool(conv1, ksize=[1,2,2,1], strides=[1,2,2,1],
+            padding="SAME")
+
+    conv2 = tf.nn.relu(tf.nn.conv2d(max1, conv2_W, strides=[1,2,2,1],
+        padding="SAME") + conv2_b)
+
+    max2 = tf.nn.max_pool(conv2, ksize=[1,2,2,1], strides=[1,2,2,1],
+            padding="SAME")
+
+    conv3 = tf.nn.relu(tf.nn.conv2d(max2, conv3_W, strides=[1,1,1,1],
+        padding="SAME") + conv3_b)
+
+    max3 = tf.nn.max_pool(conv3, ksize=[1,2,2,1], strides=[1,2,2,1],
+            padding="SAME")
+
+    flatten = tf.reshape(max3, [-1, 256])
+    print "Here"
+    print flatten
+
+    fc1 = tf.nn.relu(tf.matmul(flatten, fc1_W) + fc1_b)
+
+    output_layer = tf.matmul(fc1, fc2_W) + fc2_b
+
+    return input_layer, output_layer
+
+# Initialise the q network
+def create_network_deepmind():
+    conv1_W = tf.Variable(tf.truncated_normal([8, 8, STATE_FRAMES, 32],
+        stddev=0.01))
+    conv1_b = tf.Variable(tf.constant(0.1, shape=[32]))
+
+    conv2_W = tf.Variable(tf.truncated_normal([4, 4, 32, 64], stddev=0.1))
+    conv2_b = tf.Variable(tf.constant(0.1, shape=[64]))
+
+    conv3_W = tf.Variable(tf.truncated_normal([3, 3, 64, 64], stddev=0.1))
+    conv3_b = tf.Variable(tf.constant(0.1, shape=[64]))
+
+    fc1_W = tf.Variable(tf.truncated_normal([7*7*64, 512], stddev=0.1))
+    fc1_b = tf.Variable(tf.constant(0.1, shape=[512]))
+    
+    fc2_W = tf.Variable(tf.truncated_normal([512, NUM_ACTIONS], stddev=0.1))
+    fc2_b = tf.Variable(tf.constant(0.1, shape=[NUM_ACTIONS]))
+
+    input_layer = tf.placeholder("float", [None, RESIZED_SCREEN_X,
+        RESIZED_SCREEN_Y, STATE_FRAMES])
+
+    conv1 = tf.nn.relu(tf.nn.conv2d(input_layer, conv1_W, strides=[1,4,4,1],
+        padding="SAME") + conv1_b)
+
+    conv2 = tf.nn.relu(tf.nn.conv2d(conv1, conv2_W, strides=[1,2,2,1],
+        padding="VALID") + conv2_b)
+
+    conv3 = tf.nn.relu(tf.nn.conv2d(conv2, conv3_W, strides=[1,1,1,1],
+        padding="VALID") + conv3_b)
+
+    flatten = tf.reshape(conv3, [-1, 7*7*64])
+
+    fc1 = tf.nn.relu(tf.matmul(flatten, fc1_W) + fc1_b)
+
+    output_layer = tf.matmul(fc1, fc2_W) + fc2_b
+
+    return input_layer, output_layer
+
+# Assigns the values of the weights of 'net' to the weights of 'net_to_update'
+def update_network(net_to_update, net):
+    # TODO: Add update, so that we can hold the behaviour network fixed for a
+    # while and then switch to the target network with the updates.
+    return net
+
+# Run deep q learning
 pong_deep_q_learn()
