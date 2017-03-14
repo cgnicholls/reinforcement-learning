@@ -395,7 +395,7 @@ def estimate_value(sess, network, game_name, max_eps=10, max_steps_per_ep=10000,
             else:
                 current_state = next_state
         discounted_rewards.append(ep_reward)
-    return np.mean(discounted_rewards), np.mean(all_rewards)
+    return np.mean(discounted_rewards), np.std(discounted_rewards), np.mean(all_rewards), np.std(all_rewards)
 
 game_name = 'Breakout-v0'
 # First see what a random agent gets on the game
