@@ -78,7 +78,7 @@ def train(sess, network, observations):
 
     one_hot_actions = compute_one_hot_actions(actions)
 
-    network.train(sess, states, one_hot_actionsactions, target_q)
+    network.train(sess, states, one_hot_actions, target_q)
 
 # Return a one hot vector with a 1 at the index for the action.
 def compute_one_hot_actions(actions):
@@ -195,7 +195,7 @@ def pong_deep_q_learn():
 
         # Train the target network if we have reached the number of 
         # observation steps
-        if (t >= OBSERVATION_STEPS) and (t % SKIP_ACTION == 0):
+        if (t >= OBSERVATION_STEPS):
             train(tf_sess, target_network, observations)
     
         # Anneal epsilon for epsilon-greedy strategy
@@ -267,7 +267,7 @@ def compute_average_q_value(sess, network, states):
     })
 
     # Compute the average of the maximum q-value for each state
-    avg_max_q_values = np.mean(np.max(tf_output_layer, axis=1))
+    avg_max_q_values = np.mean(np.max(q_vals, axis=1))
 
     return avg_max_q_values
 
@@ -310,8 +310,8 @@ class NetworkDeepmind():
         self.input_layer = tf.placeholder("float", [None, RESIZED_SCREEN_X,
             RESIZED_SCREEN_Y, STATE_FRAMES])
 
-        conv1 = tf.nn.relu(tf.nn.conv2d(input_layer, conv1_W, strides=[1,4,4,1],
-            padding="SAME") + conv1_b)
+        conv1 = tf.nn.relu(tf.nn.conv2d(self.input_layer, conv1_W,
+            strides=[1,4,4,1], padding="SAME") + conv1_b) 
 
         conv2 = tf.nn.relu(tf.nn.conv2d(conv1, conv2_W, strides=[1,2,2,1],
             padding="VALID") + conv2_b)
@@ -340,7 +340,7 @@ class NetworkDeepmind():
 
         # The train operation: reduce the cost using Adam
         self.train_operation = \
-                tf.train.AdamOptimizer(INITIAL_LEARNING_RATE).minimize(tf_cost)
+                tf.train.AdamOptimizer(INITIAL_LEARNING_RATE).minimize(self.cost)
 
     def compute_action(self, sess, state):
         q = sess.run(self.output_layer, feed_dict={self.input_layer: \
@@ -351,7 +351,7 @@ class NetworkDeepmind():
     def train(self, sess, states, actions, targets):
         sess.run(self.train_operation, feed_dict={
             self.input_layer: states,
-            self.action = actions,
+            self.action: actions,
             self.target: targets
         })
 
