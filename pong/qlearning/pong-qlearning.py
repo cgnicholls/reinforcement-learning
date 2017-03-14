@@ -32,12 +32,12 @@ STATE_FRAMES = 4
 RESIZED_SCREEN_X, RESIZED_SCREEN_Y = 80, 80
 
 # Epsilon greedy
-EPSILON_GREEDY_STEPS = 100000 # The total number of time steps to anneal epsilon
+EPSILON_GREEDY_STEPS = 5000 # The total number of time steps to anneal epsilon
 INITIAL_EPSILON_GREEDY = 1.0 # Initial epsilon
 FINAL_EPSILON_GREEDY = 0.1 # Final epsilon
 
 # Observation period
-OBSERVATION_STEPS = 500 # Time steps to observe before training
+OBSERVATION_STEPS = 5000 # Time steps to observe before training
 MEMORY_SIZE = 100000
 
 # The minibatch size to train with
@@ -140,9 +140,9 @@ def pong_deep_q_learn():
 
         # Copy the network parameters from the target network to the q_network
         # every UPDATE_NETWORK_EVERY timesteps.
-        if (t % UPDATE_NETWORK_EVERY == 0) and t > 0:
+        if (t % UPDATE_NETWORK_EVERY == 0) and t > OBSERVATION_STEPS:
+            print "Updating Q network"
             copy_network_params(tf_sess, target_network, q_network)
-            
 
         # Compute action
         action = compute_action(tf_sess, q_network, current_state, epsilon_greedy)
@@ -163,6 +163,9 @@ def pong_deep_q_learn():
             nonzero_rewards.append(reward)
             if len(nonzero_rewards) > NONZERO_REWARD_MEMORY:
                 nonzero_rewards.popleft()
+
+        if t < OBSERVATION_STEPS and t % 100 == 0:
+            print "Observing", t, "/", OBSERVATION_STEPS
 
         # Compute the average q-value, and display the average reward and
         # average q-value
