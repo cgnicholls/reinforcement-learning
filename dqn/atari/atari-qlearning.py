@@ -32,13 +32,13 @@ STATE_FRAMES = 4
 RESIZED_SCREEN_X, RESIZED_SCREEN_Y = 80, 80
 
 # Epsilon greedy
-EPSILON_GREEDY_STEPS = 5000 # The total number of time steps to anneal epsilon
+EPSILON_GREEDY_STEPS = 1000000 # The total number of time steps to anneal epsilon
 INITIAL_EPSILON_GREEDY = 1.0 # Initial epsilon
 FINAL_EPSILON_GREEDY = 0.1 # Final epsilon
 
 # Observation period
-OBSERVATION_STEPS = 5000 # Time steps to observe before training
-MEMORY_SIZE = 100000
+OBSERVATION_STEPS = 1000000 # Time steps to observe before training
+MEMORY_SIZE = 1000000
 
 # The minibatch size to train with
 MINI_BATCH_SIZE = 32 
@@ -56,8 +56,11 @@ UPDATE_NETWORK_EVERY = 1000
 RENDER_EVERY = 100
 RENDER = False
 
+# Take an action every SKIP_FRAMES frame
+SKIP_FRAMES = 4
+
 # Train the agent
-def train(sess, network, observations):
+def train(sess, q_network, target_network, observations):
     # Sample a minibatch to train on
     mini_batch = random.sample(observations, MINI_BATCH_SIZE)
 
@@ -67,16 +70,19 @@ def train(sess, network, observations):
     next_states = [d['next_state'] for d in mini_batch]
     terminal = np.array([d['terminal'] for d in mini_batch])
 
-    # Compute Q(s', a'; theta_{i-1}). This is an unbiased estimator for y_i as
-    # in eqn 2 in the DQN paper.
-    next_q = sess.run(network.output_layer, feed_dict={network.input_layer : \
-            next_states})
-
+    # Compute Q(s', a'; theta'), where theta' are the parameters for the target
+    # network. This is an unbiased estimator for y_i as in eqn 2 in the DQN
+    # paper.
+    next_q = sess.run(target_network.output_layer, feed_dict={
+        target_network.input_layer: next_states
+    })
+    
     target_q = rewards + np.invert(terminal).astype('float32') * DISCOUNT_FACTOR * np.max(next_q, axis=1)
 
     one_hot_actions = compute_one_hot_actions(actions)
 
-    network.train(sess, states, one_hot_actions, target_q)
+    # Train the q-network (i.e. the parameters theta).
+    q_network.train(sess, states, one_hot_actions, target_q)
 
 # Return a one hot vector with a 1 at the index for the action.
 def compute_one_hot_actions(actions):
@@ -98,6 +104,7 @@ def deep_q_learn(game_name='Pong-v0'):
     target_network = NetworkDeepmind("target_network")
 
     tf_sess.run(tf.global_variables_initializer())
+    copy_network_params(tf_sess, q_network, target_network)
 
     epsilon_greedy = INITIAL_EPSILON_GREEDY
 
@@ -130,6 +137,9 @@ def deep_q_learn(game_name='Pong-v0'):
     # Enter loop over number of time steps
     t = 0
     ep_count = 0
+
+    # Set up the last action
+    last_action = ACTIONS[0]
     while True:
 
         # At timestep OBSERVATION_STEPS, we generate some random states to test
@@ -139,14 +149,18 @@ def deep_q_learn(game_name='Pong-v0'):
                     BENCHMARK_STATES)
             benchmark_states = [d['state'] for d in benchmark_observations]
 
-        # Copy the network parameters from the target network to the q_network
+        # Copy the network parameters from the q network to the target network
         # every UPDATE_NETWORK_EVERY timesteps.
         if (t % UPDATE_NETWORK_EVERY == 0) and t > OBSERVATION_STEPS:
-            print "Updating Q network"
-            copy_network_params(tf_sess, target_network, q_network)
+            print "Updating target network"
+            copy_network_params(tf_sess, q_network, target_network)
 
-        # Compute action
-        action = compute_action(tf_sess, q_network, current_state, epsilon_greedy)
+        # Compute action using the q-network
+        if t % SKIP_FRAMES == 0:
+            action = compute_action(tf_sess, q_network, current_state, epsilon_greedy)
+            last_action = action
+        else:
+            action = last_action
 
         # Take a step with action
         obs, reward, terminal, info = env.step(action)
@@ -203,7 +217,7 @@ def deep_q_learn(game_name='Pong-v0'):
         # Train the target network if we have reached the number of 
         # observation steps
         if (t >= OBSERVATION_STEPS):
-            train(tf_sess, target_network, observations)
+            train(tf_sess, q_network, target_network, observations)
     
         # Anneal epsilon for epsilon-greedy strategy
         if epsilon_greedy > FINAL_EPSILON_GREEDY and len(observations) > \
