@@ -346,8 +346,7 @@ class NetworkDeepmind():
                 tf.train.AdamOptimizer(INITIAL_LEARNING_RATE).minimize(self.cost)
 
     def compute_action(self, sess, state):
-        q = sess.run(self.output_layer, feed_dict={self.input_layer: \
-        [current_state]})[0]
+        q = sess.run(self.output_layer, feed_dict={self.input_layer: [state]})[0]
         action_index = np.argmax(q)
         return ACTIONS[action_index]
 
