@@ -23,7 +23,7 @@ BENCHMARK_STATES = 100
 REWARD_MEMORY = 10000
 
 # The initial learning rate to use
-INITIAL_LEARNING_RATE = 1e-5
+INITIAL_LEARNING_RATE = 0.00025
 
 # The number of frames to use as our state
 STATE_FRAMES = 4
@@ -37,8 +37,8 @@ INITIAL_EPSILON_GREEDY = 1.0 # Initial epsilon
 FINAL_EPSILON_GREEDY = 0.1 # Final epsilon
 
 # Observation period
-OBSERVATION_STEPS = 1000000 # Time steps to observe before training
 MEMORY_SIZE = 1000000
+OBSERVATION_STEPS = 50000 # Time steps to observe before training
 
 # The minibatch size to train with
 MINI_BATCH_SIZE = 32 
@@ -49,8 +49,8 @@ DISCOUNT_FACTOR = 0.99
 # Output average Q value every VERBOSE_EVERY_STEPS
 VERBOSE_EVERY_STEPS = 100
 
-# Copy the network every 1000 steps
-UPDATE_NETWORK_EVERY = 1000
+# Copy the network every 10000 steps
+UPDATE_NETWORK_EVERY = 10000
 
 # Every RENDER_EVERY episodes, render the agent
 RENDER_EVERY = 100
@@ -58,6 +58,9 @@ RENDER = False
 
 # Take an action every SKIP_FRAMES frame
 SKIP_FRAMES = 4
+
+# Whether or not to make the plots
+MAKE_PLOTS = True
 
 # Train the agent
 def train(sess, q_network, target_network, observations):
@@ -181,7 +184,7 @@ def deep_q_learn(game_name='Pong-v0'):
         if len(reward_history) > REWARD_MEMORY:
             reward_history.popleft()
 
-        if t < OBSERVATION_STEPS and t % 100 == 0:
+        if t < OBSERVATION_STEPS and t % 1000 == 0:
             print "Observing", t, "/", OBSERVATION_STEPS
 
         # Compute the average q-value, and display the average reward and
@@ -202,8 +205,9 @@ def deep_q_learn(game_name='Pong-v0'):
                     np.array(avg_reward_history)[:,np.newaxis], axis=1)
 
             # Save the plot
-            plt.plot(plot_data)
-            plt.savefig("rewardhistory" + identifier + ".jpg")
+            if MAKE_PLOTS:
+                plt.plot(plot_data)
+                plt.savefig("rewardhistory" + identifier + ".jpg")
 
             if plot:
                 ax1.clear()
@@ -359,7 +363,7 @@ class NetworkDeepmind():
 
         # The train operation: reduce the cost using Adam
         self.train_operation = \
-                tf.train.AdamOptimizer(INITIAL_LEARNING_RATE).minimize(self.cost)
+                tf.train.RMSPropOptimizer(INITIAL_LEARNING_RATE).minimize(self.cost)
 
     def compute_action(self, sess, state):
         q = sess.run(self.output_layer, feed_dict={self.input_layer: [state]})[0]
