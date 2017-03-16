@@ -31,7 +31,7 @@ import numpy as np
 from time import sleep
 import gym
 
-T_MAX = 50000
+T_MAX = 10000000
 NUM_ACTIONS = 4
 RESIZED_SCREEN_X = 80
 RESIZED_SCREEN_Y = 80
@@ -135,7 +135,7 @@ class Worker():
 
                 initial_epsilon = 1.0
                 final_epsilon = 0.1
-                epsilon_steps = np.random.randint(10000, 20000)
+                epsilon_steps = np.random.randint(100000, 200000)
                 epsilon = initial_epsilon
 
                 while True:
