@@ -31,7 +31,7 @@ import numpy as np
 from time import sleep
 import gym
 
-T_MAX = 1000
+T_MAX = 50000
 NUM_ACTIONS = 4
 RESIZED_SCREEN_X = 80
 RESIZED_SCREEN_Y = 80
@@ -134,34 +134,63 @@ class Worker():
                 # Start a new episode
                 obs = self.env.reset()
                 current_state = compute_state(None, obs)
-                reward_history = []
+                episode_rewards = []
+                episode_reward = 0
+
+                initial_epsilon = 1.0
+                final_epsilon = 0.1
+                epsilon_steps = np.random.randint(10000, 20000)
+                epsilon = initial_epsilon
 
                 while True:
-                    a = np.random.choice(self.actions)
+                    epsilon = np.max(epsilon - (initial_epsilon-final_epsilon)/float(epsilon_steps), final_epsilon)
+                    if np.random.rand() < epsilon:
+                        a = np.random.choice(self.actions)
+                    else:
+                        qs = sess.run(self.local_network.output_layer, feed_dict={
+                            self.local_network.input_layer: [current_state]
+                        })
+                        a = np.argmax(qs)
                     
                     obs, reward, done, info = self.env.step(a)
                     next_state = compute_state(current_state, obs)
 
-                    reward_history.append(reward)
-                    if self.t % 100 == 0:
-                        print "Average reward:", np.mean(reward_history)
+                    episode_reward += reward
                     y = reward
                     if not done:
                         # Compute Q-value wrt local theta
+                        # Really this should be theta_target.
                         next_q = sess.run(self.local_network.output_layer, 
                         feed_dict={
                             self.local_network.input_layer: [next_state]
                         })
                         y += DISCOUNT_FACTOR * np.max(next_q)
                     
-                    # Compute the gradient of the loss
+                    # Compute the gradient of the loss and update the global
+                    # theta
                     sess.run(self.local_network.apply_grads, feed_dict={
                         self.local_network.input_layer: [current_state],
                         self.local_network.action: [a],
                         self.local_network.target: [y]
                     })
+                    
+                    # Get a new copy of the global theta
+                    sess.run(self.update_local_network_ops)
 
                     self.t += 1
+
+                    if done:
+                        obs = self.env.reset()
+                        current_state = compute_state(None, obs)
+                        episode_rewards.append(episode_reward)
+                        print "Worker", self.name, "Episode reward:", episode_reward
+                        episode_reward = 0
+                    else:
+                        current_state = next_state
+
+                    if T % I_TARGET == 0:
+                        update_target_network()
+
                     if T > T_MAX:
                         return
 
