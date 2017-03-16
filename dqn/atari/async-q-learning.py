@@ -127,10 +127,6 @@ class Worker():
                 # network.
                 sess.run(self.update_local_network_ops)
 
-                # Add one to the global number of steps
-                sess.run(self.increment_T)
-                T = sess.run(self.T)
-
                 # Start a new episode
                 obs = self.env.reset()
                 current_state = compute_state(None, obs)
@@ -143,6 +139,10 @@ class Worker():
                 epsilon = initial_epsilon
 
                 while True:
+                    # Add one to the global number of steps
+                    sess.run(self.increment_T)
+                    T = sess.run(self.T)
+
                     epsilon = np.max(epsilon - (initial_epsilon-final_epsilon)/float(epsilon_steps), final_epsilon)
                     if np.random.rand() < epsilon:
                         a = np.random.choice(self.actions)
@@ -183,13 +183,10 @@ class Worker():
                         obs = self.env.reset()
                         current_state = compute_state(None, obs)
                         episode_rewards.append(episode_reward)
-                        print "Worker", self.name, "Episode reward:", episode_reward
+                        print "T = ", T, ",", self.name, "episode reward:", episode_reward
                         episode_reward = 0
                     else:
                         current_state = next_state
-
-                    if T % I_TARGET == 0:
-                        update_target_network()
 
                     if T > T_MAX:
                         return
