@@ -39,8 +39,8 @@ STATE_FRAMES = 4
 INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
 
-I_TARGET = 100
-I_ASYNC_UPDATE = 100
+I_TARGET = 10000
+I_ASYNC_UPDATE = 500
 
 class NetworkDeepmind():
     def __init__(self, scope, trainer):
@@ -49,7 +49,7 @@ class NetworkDeepmind():
             self.create_network()
             
             # We need ops for training for the worker networks.
-            if scope != 'global_network':
+            if scope != 'global_network' and scope != 'target_network':
                 self.action = tf.placeholder(shape=[None], dtype=tf.int32)
                 self.one_hot_actions = tf.one_hot(self.action, NUM_ACTIONS,
                 dtype=tf.float32)
@@ -62,8 +62,9 @@ class NetworkDeepmind():
                 # Get the gradients from the worker network using losses
                 local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
                 self.gradients = tf.gradients(self.loss, local_vars)
-
                 self.trainer = trainer
+
+                self.grads_and_vars = trainer.compute_gradients(self.loss, local_vars)
 
                 # The operator for applying worker gradients to global network
                 global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global_network')
@@ -105,27 +106,33 @@ class NetworkDeepmind():
         self.output_layer = tf.matmul(fc1, fc2_W) + fc2_b
 
 class Worker():
-    def __init__(self, name, game_name, T, trainer):
+    def __init__(self, name, game_name, T, trainer, target_network,
+        update_target_op):
         self.grad_theta = None
         self.t = 0
         self.T = T
         self.name = name
         self.local_network = NetworkDeepmind(self.name, trainer)
+        self.target_network = target_network
         self.increment_T = self.T.assign_add(1)
         self.trainer = trainer
         self.update_local_network_ops = copy_network_params('global_network', self.name)
+        self.update_target_op = update_target_op
         self.env = gym.make(game_name)
         self.actions = range(NUM_ACTIONS)
 
     # First step is to implement one thread and get it running on its own.
     def work(self, sess, coordinator):
         print "Starting worker " + self.name
-    
+
         with sess.as_default(), sess.graph.as_default():
             while not coordinator.should_stop():
                 # First make a copy of the global parameters for our worker's
                 # network.
                 sess.run(self.update_local_network_ops)
+                # Also make sure that the target network is initialised the same
+                # as the global network
+                sess.run(self.update_target_op)
 
                 # Start a new episode
                 obs = self.env.reset()
@@ -137,6 +144,10 @@ class Worker():
                 final_epsilon = 0.1
                 epsilon_steps = np.random.randint(100000, 200000)
                 epsilon = initial_epsilon
+
+                batch_states = []
+                batch_as = []
+                batch_ys = []
 
                 while True:
                     # Add one to the global number of steps
@@ -153,29 +164,43 @@ class Worker():
                         a = np.argmax(qs)
                     
                     obs, reward, done, info = self.env.step(a)
+
                     next_state = compute_state(current_state, obs)
 
                     episode_reward += reward
                     y = reward
                     if not done:
-                        # Compute Q-value wrt local theta
-                        # Really this should be theta_target.
+                        # Compute Q-value wrt theta_target
+                        next_q_target = sess.run(self.target_network.output_layer, feed_dict={
+                            self.target_network.input_layer: [next_state]
+                        })
                         next_q = sess.run(self.local_network.output_layer, 
                         feed_dict={
                             self.local_network.input_layer: [next_state]
                         })
-                        y += DISCOUNT_FACTOR * np.max(next_q)
+                        y += DISCOUNT_FACTOR * np.max(next_q_target)
+
+                    # Add state, action and y to the batch
+                    batch_states.append(current_state)
+                    batch_as.append(a)
+                    batch_ys.append(y)
                     
-                    # Compute the gradient of the loss and update the global
-                    # theta
-                    sess.run(self.local_network.apply_grads, feed_dict={
-                        self.local_network.input_layer: [current_state],
-                        self.local_network.action: [a],
-                        self.local_network.target: [y]
-                    })
-                    
-                    # Get a new copy of the global theta
-                    sess.run(self.update_local_network_ops)
+                    if self.t % I_ASYNC_UPDATE == 0:
+                        # Compute the gradient of the loss and update the global
+                        # theta
+                        sess.run(self.local_network.apply_grads, feed_dict={
+                            self.local_network.input_layer: batch_states, 
+                            self.local_network.action: batch_as,
+                            self.local_network.target: batch_ys 
+                        })
+
+                        # Reset our batch
+                        batch_states = []
+                        batch_as = []
+                        batch_ys = []
+
+                        # Get a new copy of the global theta
+                        sess.run(self.update_local_network_ops)
 
                     self.t += 1
 
@@ -187,6 +212,10 @@ class Worker():
                         episode_reward = 0
                     else:
                         current_state = next_state
+
+                    if T % I_TARGET == 0:
+                        print "T", T, "Updating target network"
+                        sess.run(self.update_target_op)
 
                     if T > T_MAX:
                         return
@@ -239,11 +268,14 @@ def async_q_learn(game_name='Breakout-v0'):
     T = tf.Variable(0, dtype=tf.int32, name='T')
     trainer = tf.train.AdamOptimizer(learning_rate=INITIAL_LEARNING_RATE)
     global_network = NetworkDeepmind('global_network', None)
+    target_network = NetworkDeepmind('target_network', None)
+    update_target_op = copy_network_params('global_network', 'target_network')
 
     # Create num_workers workers
     workers = []
     for i in range(num_workers):
-        workers.append(Worker('worker_'+str(i), game_name, T, trainer))
+        workers.append(Worker('worker_'+str(i), game_name, T, trainer,
+        target_network, update_target_op))
 
     with tf.Session() as sess:
         coordinator = tf.train.Coordinator()
