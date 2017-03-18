@@ -31,6 +31,7 @@ import tensorflow as tf
 import numpy as np
 from time import sleep
 import gym
+import Queue
 
 T_MAX = 100000000
 NUM_ACTIONS = 2
@@ -122,15 +123,14 @@ class NetworkDeepmind():
         self.output_layer = tf.matmul(fc1, fc2_W) + fc2_b
 
 class Worker():
-    def __init__(self, name, game_name, T, trainer, target_network,
+    def __init__(self, name, game_name, T_queue, trainer, target_network,
         global_network):
         self.grad_theta = None
         self.t = 0
-        self.T = T
+        self.T_queue = T_queue
         self.name = name
         self.local_network = NetworkDeepmind(self.name, trainer)
         self.target_network = target_network
-        self.increment_T = self.T.assign_add(1)
         self.trainer = trainer
         self.update_local_network_ops = copy_network_params('global_network', self.name)
         self.update_target_op = copy_network_params('global_network', 'target_network')
@@ -172,13 +172,13 @@ class Worker():
 
                 while True:
                     is_training_step = self.t % SKIP_ACTIONS == 0 or last_action == None
-                    T = sess.run(self.T)
+                    Tq = self.T_queue.get()
                     if is_training_step:
                         # Add one to the global number of steps
-                        sess.run(self.increment_T)
+                        self.T_queue.put(Tq+1)
 
                         # Update epsilons
-                        epsilons = np.max([initial_epsilons - float(T)*(initial_epsilons-final_epsilons)/float(EPSILON_STEPS), final_epsilons], axis=0)
+                        epsilons = np.max([initial_epsilons - float(Tq)*(initial_epsilons-final_epsilons)/float(EPSILON_STEPS), final_epsilons], axis=0)
                         if np.random.rand() < epsilon:
                             a = np.random.choice(self.actions)
                         else:
@@ -235,13 +235,12 @@ class Worker():
                     self.t += 1
 
                     if self.t % VERBOSE_EVERY == 0 and len(episode_rewards) > 0:
-                        print "T", T, self.name, "Average episode reward", np.mean(episode_rewards), "average last 5:", np.mean(episode_rewards[-5:])
+                        print "T", Tq, self.name, "Average episode reward", np.mean(episode_rewards), "average last 5:", np.mean(episode_rewards[-5:])
 
                     if done:
                         obs = self.env.reset()
                         current_state = compute_state(None, obs)
                         episode_rewards.append(episode_reward)
-                        #print "T =", T, self.name, "episode reward:", episode_reward
                         episode_reward = 0
 
                         # Choose new epsilon
@@ -249,16 +248,16 @@ class Worker():
                     else:
                         current_state = next_state
 
-                    if is_training_step and T % I_TARGET == 0:
+                    if is_training_step and Tq % I_TARGET == 0:
                         print "Estimating value"
                         estimated_v = estimate_value(sess, self.game_name, self.global_network)
                         print "Estimated value", estimated_v
 
-                    if is_training_step and T % I_TARGET == 0:
-                        print "T", T, "Updating target network"
+                    if is_training_step and Tq % I_TARGET == 0:
+                        print "T", Tq, "Updating target network"
                         sess.run(self.update_target_op)
 
-                    if T > T_MAX:
+                    if Tq > T_MAX:
                         return
 
                     if done:
@@ -306,20 +305,22 @@ def copy_network_params(from_scope, to_scope):
     return ops
 
 def async_q_learn(game_name='Breakout-v0'):
-    num_workers = multiprocessing.cpu_count()
-    num_workers = 16
+    #num_workers = multiprocessing.cpu_count()
+    num_workers = 8
     print "Using", num_workers, "workers"
     tf.reset_default_graph()
 
-    T = tf.Variable(0, dtype=tf.int32, name='T')
     trainer = tf.train.AdamOptimizer(learning_rate=INITIAL_LEARNING_RATE)
     global_network = NetworkDeepmind('global_network', None)
     target_network = NetworkDeepmind('target_network', None)
 
+    T_queue = Queue.Queue()
+    T_queue.put(0)
+
     # Create num_workers workers
     workers = []
     for i in range(num_workers):
-        workers.append(Worker('worker_'+str(i), game_name, T, trainer,
+        workers.append(Worker('worker_'+str(i), game_name, T_queue, trainer,
         target_network, global_network))
 
     with tf.Session() as sess:
