@@ -33,24 +33,24 @@ from time import sleep
 import gym
 
 T_MAX = 100000000
-NUM_ACTIONS = 4
+NUM_ACTIONS = 2
 RESIZED_SCREEN_X = 80
 RESIZED_SCREEN_Y = 80
 STATE_FRAMES = 4
 INITIAL_LEARNING_RATE = 1e-3
 DISCOUNT_FACTOR = 0.99
-SKIP_ACTIONS = 4
+SKIP_ACTIONS = 1
 VERBOSE_EVERY = 2000
-EPSILON_STEPS = 1000000
+EPSILON_STEPS = 100000
 
-I_TARGET = 4000
+I_TARGET = 40000
 I_ASYNC_UPDATE = 5
 
 class NetworkDeepmind():
     def __init__(self, scope, trainer):
         self.scope = scope
         with tf.variable_scope(self.scope):
-            self.create_network()
+            self.create_network_cart_pole()
             
             # We need ops for training for the worker networks.
             if scope != 'global_network' and scope != 'target_network':
@@ -74,7 +74,21 @@ class NetworkDeepmind():
                 global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global_network')
                 self.apply_grads = trainer.apply_gradients(zip(self.gradients, global_vars))
 
-    def create_network(self, initial_stddev=0.01, initial_bias=0.1):
+    def create_network_cart_pole(self, initial_stddev=1.0, initial_bias=0.1):
+        self.input_layer = tf.placeholder("float", [None, 4])
+        fc1_W = tf.Variable(tf.truncated_normal([4, 32],
+        stddev=initial_stddev/np.sqrt(4)))
+        fc1_b = tf.Variable(tf.constant(initial_bias, shape=[32]))
+        fc1 = tf.nn.tanh(tf.matmul(self.input_layer, fc1_W) + fc1_b)
+
+        fc2_W = tf.Variable(tf.truncated_normal([32, 2],
+        stddev=initial_stddev/np.sqrt(32)))
+        fc2_b = tf.Variable(tf.constant(initial_bias, shape=[2]))
+        fc2 = tf.matmul(fc1, fc2_W) + fc2_b
+
+        self.output_layer = fc2
+
+    def create_network(self, initial_stddev=1.0, initial_bias=0.1):
         self.input_layer = tf.placeholder("float", [None, RESIZED_SCREEN_X,
             RESIZED_SCREEN_Y, STATE_FRAMES])
 
@@ -130,38 +144,38 @@ class Worker():
         print "Starting worker " + self.name
 
         with sess.as_default(), sess.graph.as_default():
+            # First make a copy of the global parameters for our worker's
+            # network.
+            sess.run(self.update_local_network_ops)
+            # Also make sure that the target network is initialised the same
+            # as the global network
+            sess.run(self.update_target_op)
+
+            # Start a new episode
+            obs = self.env.reset()
+            current_state = compute_state(None, obs)
+            episode_rewards = []
+            episode_reward = 0
+
+            initial_epsilons = np.array([1.0, 1.0, 1.0])
+            final_epsilons = np.array([0.1, 0.01, 0.5])
+            epsilons = initial_epsilons
+
+            batch_states = []
+            batch_as = []
+            batch_ys = []
+
+            last_action = None
             while not coordinator.should_stop():
-                # First make a copy of the global parameters for our worker's
-                # network.
-                sess.run(self.update_local_network_ops)
-                # Also make sure that the target network is initialised the same
-                # as the global network
-                sess.run(self.update_target_op)
-
-                # Start a new episode
-                obs = self.env.reset()
-                current_state = compute_state(None, obs)
-                episode_rewards = []
-                episode_reward = 0
-
-                initial_epsilons = np.array([1.0, 1.0, 1.0])
-                final_epsilons = np.array([0.1, 0.01, 0.5])
-                epsilons = initial_epsilons
-
-                batch_states = []
-                batch_as = []
-                batch_ys = []
-
-                last_action = None
 
                 epsilon = np.random.choice(epsilons, p=[0.4,0.3,0.3])
 
                 while True:
                     is_training_step = self.t % SKIP_ACTIONS == 0 or last_action == None
+                    T = sess.run(self.T)
                     if is_training_step:
                         # Add one to the global number of steps
                         sess.run(self.increment_T)
-                        T = sess.run(self.T)
 
                         # Update epsilons
                         epsilons = np.max([initial_epsilons - float(T)*(initial_epsilons-final_epsilons)/float(EPSILON_STEPS), final_epsilons], axis=0)
@@ -221,7 +235,7 @@ class Worker():
                     self.t += 1
 
                     if self.t % VERBOSE_EVERY == 0 and len(episode_rewards) > 0:
-                        print "T", T, self.name, "Average episode reward", np.mean(episode_rewards)
+                        print "T", T, self.name, "Average episode reward", np.mean(episode_rewards), "average last 5:", np.mean(episode_rewards[-5:])
 
                     if done:
                         obs = self.env.reset()
@@ -235,22 +249,26 @@ class Worker():
                     else:
                         current_state = next_state
 
-                    if T % I_TARGET == 0:
+                    if is_training_step and T % I_TARGET == 0:
                         print "Estimating value"
                         estimated_v = estimate_value(sess, self.game_name, self.global_network)
                         print "Estimated value", estimated_v
 
-                    if T % I_TARGET == 0:
+                    if is_training_step and T % I_TARGET == 0:
                         print "T", T, "Updating target network"
                         sess.run(self.update_target_op)
 
                     if T > T_MAX:
                         return
 
+                    if done:
+                        break
+
 # If current_state is None then just repeat the observation STATE_FRAMES times.
 # Otherwise, remove the first frame, and append obs to get the new current
 # state.
 def compute_state(current_state, obs):
+    return obs
     # First preprocess the observation
     obs = preprocess(obs)
 
@@ -289,12 +307,12 @@ def copy_network_params(from_scope, to_scope):
 
 def async_q_learn(game_name='Breakout-v0'):
     num_workers = multiprocessing.cpu_count()
+    num_workers = 16
     print "Using", num_workers, "workers"
     tf.reset_default_graph()
 
     T = tf.Variable(0, dtype=tf.int32, name='T')
-    trainer = tf.train.RMSPropOptimizer(learning_rate=INITIAL_LEARNING_RATE,
-    epsilon=0.1, decay=0.99)
+    trainer = tf.train.AdamOptimizer(learning_rate=INITIAL_LEARNING_RATE)
     global_network = NetworkDeepmind('global_network', None)
     target_network = NetworkDeepmind('target_network', None)
 
@@ -322,7 +340,7 @@ def async_q_learn(game_name='Breakout-v0'):
 
 # Estimate the value of the global parameters
 def estimate_value(sess, game_name, global_network, max_episodes=5,
-    max_steps=10000):
+    max_steps=50000):
     env = gym.make(game_name)
     obs = env.reset()
     current_state = compute_state(None, obs)
@@ -346,6 +364,7 @@ def estimate_value(sess, game_name, global_network, max_episodes=5,
                 episode_rewards.append(episode_reward)
                 episode_reward = 0
                 ep += 1
+                break
             else:
                 current_state = next_state
 
