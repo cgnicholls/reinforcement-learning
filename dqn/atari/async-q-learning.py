@@ -32,12 +32,14 @@ import numpy as np
 from time import sleep
 import gym
 import Queue
+import custom_gridworld as custom
 
 T_MAX = 100000000
-NUM_ACTIONS = 4
+ACTIONS = [0,1]
+NUM_ACTIONS = len(ACTIONS)
 RESIZED_SCREEN_X = 80
 RESIZED_SCREEN_Y = 80
-STATE_FRAMES = 4
+STATE_FRAMES = 2
 INITIAL_LEARNING_RATE = 1e-3
 DISCOUNT_FACTOR = 0.99
 SKIP_ACTIONS = 1
@@ -48,10 +50,15 @@ I_TARGET = 40000
 I_ASYNC_UPDATE = 5
 
 class NetworkDeepmind():
-    def __init__(self, scope, trainer):
+    def __init__(self, game_name, scope, trainer):
         self.scope = scope
         with tf.variable_scope(self.scope):
-            self.create_network()
+            if game_name == 'custom':
+                self.create_network_custom()
+            elif game_name == 'CartPole-v0':
+                self.create_network_cart_pole()
+            else:
+                self.create_network()
             
             # We need ops for training for the worker networks.
             if scope != 'global_network' and scope != 'target_network':
@@ -89,6 +96,39 @@ class NetworkDeepmind():
 
         self.output_layer = fc2
 
+    def create_network_custom(self, initial_stddev=1.0, initial_bias=0.1):
+        self.input_layer = tf.placeholder("float", [None, 20,
+            20, STATE_FRAMES])
+
+        fan_in1 = 8 * 8 * STATE_FRAMES
+        conv1_W = tf.Variable(tf.truncated_normal([8, 8, STATE_FRAMES, 16],
+            stddev=initial_stddev/np.sqrt(fan_in1)))
+        conv1_b = tf.Variable(tf.constant(initial_bias, shape=[16]))
+        conv1 = tf.nn.relu(tf.nn.conv2d(self.input_layer, conv1_W,
+            strides=[1,4,4,1], padding="SAME") + conv1_b) 
+
+        fan_in2 = 4 * 4 * 16
+        conv2_W = tf.Variable(tf.truncated_normal([4, 4, 16, 32],
+        stddev=initial_stddev/np.sqrt(fan_in2)))
+        conv2_b = tf.Variable(tf.constant(initial_bias, shape=[32]))
+        conv2 = tf.nn.relu(tf.nn.conv2d(conv1, conv2_W, strides=[1,2,2,1],
+            padding="VALID") + conv2_b)
+
+        flatten = tf.reshape(conv2, [-1, 32])
+        
+        fan_in3 = 32
+        fc1_W = tf.Variable(tf.truncated_normal([fan_in3, 256],
+        stddev=initial_stddev/np.sqrt(fan_in3)))
+        fc1_b = tf.Variable(tf.constant(initial_bias, shape=[256]))
+        fc1 = tf.nn.relu(tf.matmul(flatten, fc1_W) + fc1_b)
+        
+        fan_in4 = 256
+        fc2_W = tf.Variable(tf.truncated_normal([256, NUM_ACTIONS],
+        stddev=initial_stddev/np.sqrt(fan_in4)))
+        fc2_b = tf.Variable(tf.constant(initial_bias, shape=[NUM_ACTIONS]))
+
+        self.output_layer = tf.matmul(fc1, fc2_W) + fc2_b
+
     def create_network(self, initial_stddev=1.0, initial_bias=0.1):
         self.input_layer = tf.placeholder("float", [None, RESIZED_SCREEN_X,
             RESIZED_SCREEN_Y, STATE_FRAMES])
@@ -107,10 +147,10 @@ class NetworkDeepmind():
         conv2 = tf.nn.relu(tf.nn.conv2d(conv1, conv2_W, strides=[1,2,2,1],
             padding="VALID") + conv2_b)
 
-        flatten = tf.reshape(conv2, [-1, 2592])
-        
         fan_in3 = 2592
-        fc1_W = tf.Variable(tf.truncated_normal([2592, 256],
+        flatten = tf.reshape(conv2, [-1, fan_in3])
+        
+        fc1_W = tf.Variable(tf.truncated_normal([fan_in3, 256],
         stddev=initial_stddev/np.sqrt(fan_in3)))
         fc1_b = tf.Variable(tf.constant(initial_bias, shape=[256]))
         fc1 = tf.nn.relu(tf.matmul(flatten, fc1_W) + fc1_b)
@@ -130,14 +170,21 @@ class Worker():
         self.T_queue = T_queue
         self.ep_r_queue = ep_r_queue
         self.name = name
-        self.local_network = NetworkDeepmind(self.name, trainer)
+        self.local_network = NetworkDeepmind(game_name, self.name, trainer)
         self.target_network = target_network
         self.trainer = trainer
         self.update_local_network_ops = copy_network_params('global_network', self.name)
         self.update_target_op = copy_network_params('global_network', 'target_network')
         self.game_name = game_name
-        self.env = gym.make(game_name)
-        self.actions = range(NUM_ACTIONS)
+        if game_name == 'custom':
+            self.env = custom.Pong(20)
+            self.actions = [0,1]
+        else:
+            self.env = gym.make(game_name)
+            self.actions = [0,1]
+            if game_name == 'Pong-v0':
+                self.actions = [2,3]
+
         self.global_network = global_network
 
     # First step is to implement one thread and get it running on its own.
@@ -186,7 +233,7 @@ class Worker():
                             qs = sess.run(self.local_network.output_layer, feed_dict={
                                 self.local_network.input_layer: [current_state]
                             })
-                            a = np.argmax(qs)
+                            a = self.actions[np.argmax(qs)]
                         # Set last action
                         last_action = a
                     else:
@@ -280,6 +327,7 @@ class Worker():
 # Otherwise, remove the first frame, and append obs to get the new current
 # state.
 def compute_state(current_state, obs):
+    return obs
     # First preprocess the observation
     obs = preprocess(obs)
 
@@ -292,6 +340,7 @@ def compute_state(current_state, obs):
 
 # Preprocess the observation to remove noise.
 def preprocess(obs):
+    return obs
     # Convert to float
     obs = obs.astype('float32')
 
@@ -316,15 +365,15 @@ def copy_network_params(from_scope, to_scope):
         ops.append(to_var.assign(from_var))
     return ops
 
-def async_q_learn(game_name='Breakout-v0'):
+def async_q_learn(game_name):
     #num_workers = multiprocessing.cpu_count()
     num_workers = 16
     print "Using", num_workers, "workers"
     tf.reset_default_graph()
 
     trainer = tf.train.AdamOptimizer(learning_rate=INITIAL_LEARNING_RATE)
-    global_network = NetworkDeepmind('global_network', None)
-    target_network = NetworkDeepmind('target_network', None)
+    global_network = NetworkDeepmind(game_name, 'global_network', None)
+    target_network = NetworkDeepmind(game_name, 'target_network', None)
 
     T_queue = Queue.Queue()
     T_queue.put(0)
@@ -355,8 +404,11 @@ def async_q_learn(game_name='Breakout-v0'):
 
 # Estimate the value of the global parameters
 def estimate_value(sess, game_name, global_network, max_episodes=5,
-    max_steps=1000):
-    env = gym.make(game_name)
+    max_steps=4000):
+    if game_name == 'custom':
+        env = custom.Pong(20)
+    else:
+        env = gym.make(game_name)
     obs = env.reset()
     current_state = compute_state(None, obs)
     episode_rewards = []
@@ -398,4 +450,4 @@ if __name__ == "__main__":
     else:
         game_name = 'Pong-v0'
     print "Trying to play", game_name
-    async_q_learn(game_name=game_name)
+    async_q_learn(game_name)
