@@ -34,7 +34,7 @@ import gym
 import Queue
 import custom_gridworld as custom
 
-CUSTOM_PONG_SIZE = 10
+CUSTOM_PONG_SIZE = 20
 T_MAX = 100000000
 ACTIONS = [0,1]
 NUM_ACTIONS = len(ACTIONS)
@@ -55,7 +55,7 @@ class NetworkDeepmind():
         self.scope = scope
         with tf.variable_scope(self.scope):
             if game_name == 'custom':
-                self.create_network_custom()
+                self.create_network_custom_contrib(CUSTOM_PONG_SIZE)
             elif game_name == 'CartPole-v0':
                 self.create_network_cart_pole()
             else:
@@ -97,6 +97,39 @@ class NetworkDeepmind():
 
         self.output_layer = fc2
 
+    def create_network_custom_contrib(self, input_size):
+        
+        self.input_layer = tf.placeholder("float", [None, input_size,
+        input_size, STATE_FRAMES])
+
+        conv1 = tf.layers.conv2d(
+            inputs=self.input_layer,
+            filters=16,
+            kernel_size=[4, 4],
+            activation=tf.nn.relu,
+            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
+
+        conv2 = tf.layers.conv2d(
+            inputs=conv1,
+            filters=16,
+            kernel_size=[4, 4],
+            activation=tf.nn.relu,
+            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
+
+        conv3 = tf.layers.conv2d(
+            inputs=conv1,
+            filters=16,
+            kernel_size=[4, 4],
+            activation=tf.nn.relu,
+            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
+
+        flatten = tf.reshape(conv3, [-1, 3136])
+
+        fc1 = tf.layers.dense(inputs=flatten, units=256, activation=tf.nn.relu,
+            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
+        self.output_layer = tf.layers.dense(inputs=fc1, units=NUM_ACTIONS, activation=tf.identity, kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
+
+        
     def create_network_custom(self, initial_stddev=1.0, initial_bias=0.1):
         
         self.input_layer = tf.placeholder("float", [None, 10,
@@ -166,7 +199,7 @@ class NetworkDeepmind():
 
 class Worker():
     def __init__(self, name, game_name, T_queue, ep_r_queue, trainer,
-        target_network, global_network):
+        target_network, global_network, merged, summary_writer, estimated_v):
         self.grad_theta = None
         self.t = 0
         self.T_queue = T_queue
@@ -188,6 +221,9 @@ class Worker():
                 self.actions = [2,3]
 
         self.global_network = global_network
+        self.merged = merged
+        self.summary_writer = summary_writer
+        self.estimated_v = estimated_v
 
     # First step is to implement one thread and get it running on its own.
     def work(self, sess, coordinator):
@@ -308,12 +344,17 @@ class Worker():
                     else:
                         current_state = next_state
 
-                    if is_training_step and Tq % I_TARGET == 0 and Tq > 0:
+                    if is_training_step and Tq % I_TARGET == 0:
                         print "Estimating value, T = ", Tq
                         #p = multiprocessing.Process(target=estimate_value, args=(sess, self.game_name, self.global_network))
                         #p.start()
                         #p.join()
                         estimated_v = estimate_value(sess, self.game_name, self.global_network)
+                        summary = sess.run(self.merged, feed_dict={
+                            self.estimated_v: estimated_v
+                        })
+                        self.summary_writer.add_summary(summary, Tq)
+                            
 
                     if is_training_step and Tq % I_TARGET == 0:
                         print "T", Tq, "Updating target network"
@@ -369,9 +410,7 @@ def copy_network_params(from_scope, to_scope):
         ops.append(to_var.assign(from_var))
     return ops
 
-def async_q_learn(game_name):
-    #num_workers = multiprocessing.cpu_count()
-    num_workers = 16
+def async_q_learn(game_name, num_workers=16):
     print "Using", num_workers, "workers"
     tf.reset_default_graph()
 
@@ -384,11 +423,18 @@ def async_q_learn(game_name):
 
     ep_r_queue = Queue.Queue()
 
+    estimated_v = tf.placeholder('float')
+    tf.summary.scalar('estimated_v', estimated_v)
+
+    merged = tf.summary.merge_all()
+    summary_writer = tf.summary.FileWriter('tensorboard/')
+
     # Create num_workers workers
     workers = []
     for i in range(num_workers):
-        workers.append(Worker('worker_'+str(i), game_name, T_queue, ep_r_queue, trainer,
-        target_network, global_network))
+        workers.append(Worker('worker_'+str(i), game_name, T_queue, ep_r_queue,
+        trainer, target_network, global_network, merged, summary_writer,
+        estimated_v))
 
     with tf.Session() as sess:
         coordinator = tf.train.Coordinator()
@@ -454,4 +500,4 @@ if __name__ == "__main__":
     else:
         game_name = 'Pong-v0'
     print "Trying to play", game_name
-    async_q_learn(game_name)
+    async_q_learn(game_name, num_workers=16)
