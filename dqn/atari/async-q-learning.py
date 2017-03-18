@@ -34,6 +34,7 @@ import gym
 import Queue
 import custom_gridworld as custom
 
+CUSTOM_PONG_SIZE = 10
 T_MAX = 100000000
 ACTIONS = [0,1]
 NUM_ACTIONS = len(ACTIONS)
@@ -97,8 +98,9 @@ class NetworkDeepmind():
         self.output_layer = fc2
 
     def create_network_custom(self, initial_stddev=1.0, initial_bias=0.1):
-        self.input_layer = tf.placeholder("float", [None, 20,
-            20, STATE_FRAMES])
+        
+        self.input_layer = tf.placeholder("float", [None, 10,
+            10, STATE_FRAMES])
 
         fan_in1 = 8 * 8 * STATE_FRAMES
         conv1_W = tf.Variable(tf.truncated_normal([8, 8, STATE_FRAMES, 16],
@@ -107,8 +109,8 @@ class NetworkDeepmind():
         conv1 = tf.nn.relu(tf.nn.conv2d(self.input_layer, conv1_W,
             strides=[1,4,4,1], padding="SAME") + conv1_b) 
 
-        fan_in2 = 4 * 4 * 16
-        conv2_W = tf.Variable(tf.truncated_normal([4, 4, 16, 32],
+        fan_in2 = 3 * 3 * 16
+        conv2_W = tf.Variable(tf.truncated_normal([3, 3, 16, 32],
         stddev=initial_stddev/np.sqrt(fan_in2)))
         conv2_b = tf.Variable(tf.constant(initial_bias, shape=[32]))
         conv2 = tf.nn.relu(tf.nn.conv2d(conv1, conv2_W, strides=[1,2,2,1],
@@ -177,7 +179,7 @@ class Worker():
         self.update_target_op = copy_network_params('global_network', 'target_network')
         self.game_name = game_name
         if game_name == 'custom':
-            self.env = custom.Pong(20)
+            self.env = custom.Pong(CUSTOM_PONG_SIZE)
             self.actions = [0,1]
         else:
             self.env = gym.make(game_name)
@@ -201,7 +203,7 @@ class Worker():
 
             # Start a new episode
             obs = self.env.reset()
-            current_state = compute_state(None, obs)
+            current_state = compute_state(self.game_name, None, obs)
             episode_rewards = []
             episode_reward = 0
 
@@ -241,7 +243,7 @@ class Worker():
                     
                     obs, reward, done, info = self.env.step(a)
 
-                    next_state = compute_state(current_state, obs)
+                    next_state = compute_state(self.game_name, current_state, obs)
 
                     episode_reward += reward
 
@@ -296,7 +298,7 @@ class Worker():
 
                     if done:
                         obs = self.env.reset()
-                        current_state = compute_state(None, obs)
+                        current_state = compute_state(self.game_name, None, obs)
                         episode_rewards.append(episode_reward)
                         self.ep_r_queue.put(episode_reward)
                         episode_reward = 0
@@ -326,10 +328,12 @@ class Worker():
 # If current_state is None then just repeat the observation STATE_FRAMES times.
 # Otherwise, remove the first frame, and append obs to get the new current
 # state.
-def compute_state(current_state, obs):
-    return obs
-    # First preprocess the observation
-    obs = preprocess(obs)
+def compute_state(game_name, current_state, obs):
+    if game_name == 'CartPole-v0':
+        return obs
+    elif game_name != 'custom':
+        # Preprocess the observation if it's an ATARI game.
+        obs = preprocess(obs)
 
     if current_state is None:
         state = np.stack(tuple(obs for i in range(STATE_FRAMES)), axis=2)
@@ -406,11 +410,11 @@ def async_q_learn(game_name):
 def estimate_value(sess, game_name, global_network, max_episodes=5,
     max_steps=4000):
     if game_name == 'custom':
-        env = custom.Pong(20)
+        env = custom.Pong(CUSTOM_PONG_SIZE)
     else:
         env = gym.make(game_name)
     obs = env.reset()
-    current_state = compute_state(None, obs)
+    current_state = compute_state(game_name, None, obs)
     episode_rewards = []
     episode_reward = 0
     ep = 0
@@ -421,7 +425,7 @@ def estimate_value(sess, game_name, global_network, max_episodes=5,
         })
         a = np.argmax(qs)
         obs, reward, done, info = env.step(a)
-        next_state = compute_state(current_state, obs)
+        next_state = compute_state(game_name, current_state, obs)
 
         episode_reward += reward
         t += 1
@@ -430,7 +434,7 @@ def estimate_value(sess, game_name, global_network, max_episodes=5,
 
         if done:
             obs = env.reset()
-            current_state = compute_state(None, obs)
+            current_state = compute_state(game_name, None, obs)
             episode_rewards.append(episode_reward)
             episode_reward = 0
             ep += 1
