@@ -34,15 +34,15 @@ import gym
 import Queue
 
 T_MAX = 100000000
-NUM_ACTIONS = 2
+NUM_ACTIONS = 4
 RESIZED_SCREEN_X = 80
 RESIZED_SCREEN_Y = 80
 STATE_FRAMES = 4
 INITIAL_LEARNING_RATE = 1e-3
 DISCOUNT_FACTOR = 0.99
 SKIP_ACTIONS = 1
-VERBOSE_EVERY = 2000
-EPSILON_STEPS = 100000
+VERBOSE_EVERY = 10000
+EPSILON_STEPS = 1000000
 
 I_TARGET = 40000
 I_ASYNC_UPDATE = 5
@@ -51,7 +51,7 @@ class NetworkDeepmind():
     def __init__(self, scope, trainer):
         self.scope = scope
         with tf.variable_scope(self.scope):
-            self.create_network_cart_pole()
+            self.create_network()
             
             # We need ops for training for the worker networks.
             if scope != 'global_network' and scope != 'target_network':
@@ -123,11 +123,12 @@ class NetworkDeepmind():
         self.output_layer = tf.matmul(fc1, fc2_W) + fc2_b
 
 class Worker():
-    def __init__(self, name, game_name, T_queue, trainer, target_network,
-        global_network):
+    def __init__(self, name, game_name, T_queue, ep_r_queue, trainer,
+        target_network, global_network):
         self.grad_theta = None
         self.t = 0
         self.T_queue = T_queue
+        self.ep_r_queue = ep_r_queue
         self.name = name
         self.local_network = NetworkDeepmind(self.name, trainer)
         self.target_network = target_network
@@ -234,13 +235,23 @@ class Worker():
 
                     self.t += 1
 
-                    if self.t % VERBOSE_EVERY == 0 and len(episode_rewards) > 0:
-                        print "T", Tq, self.name, "Average episode reward", np.mean(episode_rewards), "average last 5:", np.mean(episode_rewards[-5:])
+                    if Tq % VERBOSE_EVERY == 0:
+                        recent_ep_rewards = []
+                        while not self.ep_r_queue.empty():
+                            recent_ep_rewards.append(self.ep_r_queue.get())
+                        if len(recent_ep_rewards) > 0:
+                            print "T", Tq, self.name, "Episode rewards", np.mean(recent_ep_rewards)
+                        else:
+                            print "T", Tq, self.name, "No episode rewards yet"
+
+                    #if self.t % VERBOSE_EVERY == 0 and len(episode_rewards) > 0:
+                    #    print "T", Tq, self.name, "Average episode reward", np.mean(episode_rewards), "average last 5:", np.mean(episode_rewards[-5:])
 
                     if done:
                         obs = self.env.reset()
                         current_state = compute_state(None, obs)
                         episode_rewards.append(episode_reward)
+                        self.ep_r_queue.put(episode_reward)
                         episode_reward = 0
 
                         # Choose new epsilon
@@ -248,10 +259,12 @@ class Worker():
                     else:
                         current_state = next_state
 
-                    if is_training_step and Tq % I_TARGET == 0:
-                        print "Estimating value"
+                    if is_training_step and Tq % I_TARGET == 0 and Tq > 0:
+                        print "Estimating value, T = ", Tq
+                        #p = multiprocessing.Process(target=estimate_value, args=(sess, self.game_name, self.global_network))
+                        #p.start()
+                        #p.join()
                         estimated_v = estimate_value(sess, self.game_name, self.global_network)
-                        print "Estimated value", estimated_v
 
                     if is_training_step and Tq % I_TARGET == 0:
                         print "T", Tq, "Updating target network"
@@ -267,7 +280,6 @@ class Worker():
 # Otherwise, remove the first frame, and append obs to get the new current
 # state.
 def compute_state(current_state, obs):
-    return obs
     # First preprocess the observation
     obs = preprocess(obs)
 
@@ -306,7 +318,7 @@ def copy_network_params(from_scope, to_scope):
 
 def async_q_learn(game_name='Breakout-v0'):
     #num_workers = multiprocessing.cpu_count()
-    num_workers = 8
+    num_workers = 16
     print "Using", num_workers, "workers"
     tf.reset_default_graph()
 
@@ -317,10 +329,12 @@ def async_q_learn(game_name='Breakout-v0'):
     T_queue = Queue.Queue()
     T_queue.put(0)
 
+    ep_r_queue = Queue.Queue()
+
     # Create num_workers workers
     workers = []
     for i in range(num_workers):
-        workers.append(Worker('worker_'+str(i), game_name, T_queue, trainer,
+        workers.append(Worker('worker_'+str(i), game_name, T_queue, ep_r_queue, trainer,
         target_network, global_network))
 
     with tf.Session() as sess:
@@ -341,35 +355,42 @@ def async_q_learn(game_name='Breakout-v0'):
 
 # Estimate the value of the global parameters
 def estimate_value(sess, game_name, global_network, max_episodes=5,
-    max_steps=50000):
+    max_steps=1000):
     env = gym.make(game_name)
     obs = env.reset()
     current_state = compute_state(None, obs)
     episode_rewards = []
     episode_reward = 0
     ep = 0
+    t = 0
     while ep < max_episodes:
-        for t in range(max_steps):
-            qs = sess.run(global_network.output_layer, feed_dict={
-                global_network.input_layer: [current_state]
-            })
-            a = np.argmax(qs)
-            obs, reward, done, info = env.step(a)
-            next_state = compute_state(current_state, obs)
+        qs = sess.run(global_network.output_layer, feed_dict={
+            global_network.input_layer: [current_state]
+        })
+        a = np.argmax(qs)
+        obs, reward, done, info = env.step(a)
+        next_state = compute_state(current_state, obs)
 
-            episode_reward += reward
+        episode_reward += reward
+        t += 1
+        if t >= max_steps:
+            break
 
-            if done:
-                obs = env.reset()
-                current_state = compute_state(None, obs)
-                episode_rewards.append(episode_reward)
-                episode_reward = 0
-                ep += 1
-                break
-            else:
-                current_state = next_state
+        if done:
+            obs = env.reset()
+            current_state = compute_state(None, obs)
+            episode_rewards.append(episode_reward)
+            episode_reward = 0
+            ep += 1
+        else:
+            current_state = next_state
 
-    return np.mean(episode_rewards)
+    if len(episode_rewards) > 0:
+        estimated_v = np.mean(episode_rewards)
+    else:
+        estimated_v = episode_reward
+    print "Estimated value", estimated_v
+    return estimated_v
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
