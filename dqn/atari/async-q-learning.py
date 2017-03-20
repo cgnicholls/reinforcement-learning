@@ -34,7 +34,7 @@ import gym
 import Queue
 import custom_gridworld as custom
 
-CUSTOM_PONG_SIZE = 10
+CUSTOM_PONG_SIZE = 15
 T_MAX = 100000000
 ACTIONS = [0,1]
 NUM_ACTIONS = len(ACTIONS)
@@ -116,7 +116,9 @@ class NetworkDeepmind():
             activation=tf.nn.relu,
             kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
 
-        flatten = tf.reshape(conv2, [-1, 512])
+        # If you change the size of the Pong game, you will have to change this
+        # number.
+        flatten = tf.reshape(conv2, [-1, 2592])
 
         fc1 = tf.layers.dense(inputs=flatten, units=256, activation=tf.nn.relu,
             kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
