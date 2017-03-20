@@ -34,14 +34,14 @@ import gym
 import Queue
 import custom_gridworld as custom
 
-CUSTOM_PONG_SIZE = 20
+CUSTOM_PONG_SIZE = 10
 T_MAX = 100000000
 ACTIONS = [0,1]
 NUM_ACTIONS = len(ACTIONS)
 RESIZED_SCREEN_X = 80
 RESIZED_SCREEN_Y = 80
 STATE_FRAMES = 2
-INITIAL_LEARNING_RATE = 1e-3
+INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
 SKIP_ACTIONS = 1
 VERBOSE_EVERY = 10000
@@ -111,23 +111,18 @@ class NetworkDeepmind():
 
         conv2 = tf.layers.conv2d(
             inputs=conv1,
-            filters=16,
+            filters=32,
             kernel_size=[4, 4],
             activation=tf.nn.relu,
             kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
 
-        conv3 = tf.layers.conv2d(
-            inputs=conv1,
-            filters=16,
-            kernel_size=[4, 4],
-            activation=tf.nn.relu,
-            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
-
-        flatten = tf.reshape(conv3, [-1, 3136])
+        flatten = tf.reshape(conv2, [-1, 512])
 
         fc1 = tf.layers.dense(inputs=flatten, units=256, activation=tf.nn.relu,
             kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
-        self.output_layer = tf.layers.dense(inputs=fc1, units=NUM_ACTIONS, activation=tf.identity, kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
+        fc2 = tf.layers.dense(inputs=fc1, units=256, activation=tf.nn.relu,
+            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
+        self.output_layer = tf.layers.dense(inputs=fc2, units=NUM_ACTIONS, activation=tf.identity, kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
 
         
     def create_network_custom(self, initial_stddev=1.0, initial_bias=0.1):
