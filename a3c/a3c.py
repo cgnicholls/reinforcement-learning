@@ -66,7 +66,7 @@ class Agent():
 
         with tf.variable_scope('network'):
             self.action = tf.placeholder('int32', [None], name='action')
-            self.value_estimate = tf.placeholder('float32', [None], name='value_estimate')
+            self.target_value = tf.placeholder('float32', [None], name='target_value')
             self.weights, self.state, self.policy, self.value = self.build_model(h, w, channels)
 
         with tf.variable_scope('optimizer'):
@@ -74,15 +74,19 @@ class Agent():
 
             # For a given state and action, compute the log of the policy at
             # that action for that state. Then make sure it works on batches.
-            log_pi_for_action = tf.reduce_sum(tf.multiply(tf.log(self.policy), action_one_hot), reduction_indices=1)
+            self.log_pi_for_action = tf.reduce_sum(tf.multiply(tf.log(self.policy), action_one_hot), reduction_indices=1)
             
-            self.scaled_log_pi = tf.multiply(log_pi_for_action, self.value_estimate - self.value)
-            self.value_loss = tf.reduce_mean(tf.square(self.value_estimate - self.value))
+            # Takes in R_t - V(s_t) as in the async paper.
+            self.advantages = tf.placeholder('float32', [None], name='advantages')
+            self.scaled_log_pi = tf.multiply(self.log_pi_for_action, self.advantages)
+
+            self.entropy = - tf.reduce_sum(tf.multiply(self.policy, tf.log(self.policy)))
+            self.policy_loss = - tf.reduce_mean(tf.log(self.log_pi_for_action) * self.advantages)
+            self.value_loss = tf.reduce_mean(tf.square(self.target_value - self.value))
 
             # Not sure if this is the best approach, but we basically want to
             # maximise the scaled log policy and minimise the value loss.
-            self.loss = self.value_loss + 1e-3 * self.scaled_log_pi
-
+            self.loss = 0.5 * self.value_loss + self.policy_loss - self.entropy * 0.01
             grads = tf.gradients(self.loss, self.weights)
             grads, _ = tf.clip_by_global_norm(grads, 40.0)
             grads_vars = list(zip(grads, self.weights))
@@ -95,11 +99,12 @@ class Agent():
         return self.sess.run(self.value, {self.state: state}).flatten()
 
     # Train the network on the given states and rewards
-    def train(self, states, actions, value_estimates):
+    def train(self, states, actions, target_values, advantages):
         self.sess.run(self.train_op, feed_dict={
             self.state: states,
             self.action: actions,
-            self.value_estimate: value_estimates
+            self.target_value: target_values,
+            self.advantages: advantages
         })
 
     # Builds the DQN model as in Mnih, but we get a softmax output for the
@@ -202,20 +207,31 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary):
             batch_rewards.append(reward)
             batch_actions.append(action_idx)
 
-        value_estimate = 0
+        target_value = 0
         # If the last state was terminal, just put R = 0. Else we want the
         # estimated value of the last state.
         if not terminal:
-            value_estimate = agent.get_value(state)[0]
+            target_value = agent.get_value(state)[0]
 
         # Compute the sampled n-step discounted reward
-        batch_value_estimates = []
+        batch_target_values = []
         for reward in reversed(batch_rewards):
-            value_estimate = reward + DISCOUNT_FACTOR * value_estimate
-            batch_value_estimates.append(value_estimate)
+            target_value = reward + DISCOUNT_FACTOR * target_value
+            batch_target_values.append(target_value)
+        # Reverse the batch target values, so they are in the correct order
+        # again.
+        batch_target_values.reverse()
+
+        # Compute the estimated value of each state
+        bootstrap_values = sess.run(agent.value, feed_dict={
+            agent.state: np.vstack(batch_states)
+            })
+        bootstrap_values = np.reshape(bootstrap_values, -1)
+        batch_advantages = batch_target_values - bootstrap_values
 
         # Apply asynchronous gradient update
-        agent.train(np.vstack(batch_states), batch_actions, batch_value_estimates)
+        agent.train(np.vstack(batch_states), batch_actions, batch_target_values,
+        batch_advantages)
 
         # Anneal epsilon
         epsilon = get_epsilon(Tq, EPSILON_STEPS, epsilon_min)
