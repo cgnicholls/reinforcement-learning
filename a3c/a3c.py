@@ -42,12 +42,12 @@ from keras.layers import Convolution2D, Flatten, Dense, Input
 from keras.models import Model
 
 T_MAX = 100000000
-NUM_THREADS = 8
+NUM_THREADS = 4
 STATE_FRAMES = 4
 INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
 SKIP_ACTIONS = 4
-VERBOSE_EVERY = 40000
+VERBOSE_EVERY = 1000
 EPSILON_STEPS = 4000000
 
 I_TARGET = 40000
@@ -66,7 +66,7 @@ class Agent():
 
         with tf.variable_scope('network'):
             self.action = tf.placeholder('int32', [None], name='action')
-            self.value_estimate = tf.placeholder('float32', [None], name='reward')
+            self.value_estimate = tf.placeholder('float32', [None], name='value_estimate')
             self.weights, self.state, self.policy, self.value = self.build_model(h, w, channels)
 
         with tf.variable_scope('optimizer'):
@@ -81,7 +81,7 @@ class Agent():
 
             # Not sure if this is the best approach, but we basically want to
             # maximise the scaled log policy and minimise the value loss.
-            self.loss = -self.scaled_log_pi + self.value_loss
+            self.loss = self.value_loss + 1e-3 * self.scaled_log_pi
 
             grads = tf.gradients(self.loss, self.weights)
             grads, _ = tf.clip_by_global_norm(grads, 40.0)
@@ -99,12 +99,12 @@ class Agent():
         self.sess.run(self.train_op, feed_dict={
             self.state: states,
             self.action: actions,
-            self.value_estimate: values_estimates
+            self.value_estimate: value_estimates
         })
 
-    # Builds the DQN model as in Mnih.
+    # Builds the DQN model as in Mnih, but we get a softmax output for the
+    # policy from fc1 and a linear output for the value from fc1.
     def build_model(self, h, w, channels, hidden_size=256):
-        input_layer = tf.placeholder('float32', shape=(None, h, w, channels), name='state')
         model_input = Input(shape=(h,w,channels,))
         conv1 = Convolution2D(nb_filter=16, nb_row=8, nb_col=8, subsample=(4,4), activation='relu', border_mode='same', dim_ordering='tf')(model_input)
         conv2 = Convolution2D(nb_filter=32, nb_row=4, nb_col=4, subsample=(2,2), activation='relu', border_mode='same', dim_ordering='tf')(conv1)
@@ -118,15 +118,16 @@ class Agent():
         model = Model(input=model_input, outputs=[policy, value])
         trainable_weights = model.trainable_weights
 
-        policy_out, value_out = model(input_layer)
+        state = tf.placeholder('float32', shape=(None, h, w, channels), name='state')
+        policy_out, value_out = model(state)
 
         # Actually evaluate the inputs 
-        return trainable_weights, input_layer, policy, value
+        return trainable_weights, state, policy_out, value_out
 
 class Summary:
     def __init__(self, logdir, agent):
         with tf.variable_scope('summary'):
-            summarising = ['episode_avg_reward', 'avg_q_value']
+            summarising = ['episode_avg_reward', 'avg_value']
             self.agent = agent
             self.writer = tf.summary.FileWriter(logdir, self.agent.sess.graph)
             self.summary_ops = {}
@@ -205,12 +206,12 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary):
         # If the last state was terminal, just put R = 0. Else we want the
         # estimated value of the last state.
         if not terminal:
-            value_estimate = agent.get_value(state)
+            value_estimate = agent.get_value(state)[0]
 
         # Compute the sampled n-step discounted reward
         batch_value_estimates = []
-        for i in reversed(range(t_start, t)):
-            value_estimate = batch_rewards[i] + DISCOUNT_FACTOR * value_estimate
+        for reward in reversed(batch_rewards):
+            value_estimate = reward + DISCOUNT_FACTOR * value_estimate
             batch_value_estimates.append(value_estimate)
 
         # Apply asynchronous gradient update
@@ -223,28 +224,30 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary):
             if Tq - last_verbose >= VERBOSE_EVERY and terminal:
                 print "Worker", thread_idx, "T", Tq, "Evaluating agent"
                 last_verbose = Tq
-                episode_rewards, episode_qs = estimate_reward(agent, env, episodes=5)
+                episode_rewards, episode_vals = estimate_reward(agent, env, episodes=5)
                 avg_ep_r = np.mean(episode_rewards)
-                avg_q = np.mean(episode_qs)
-                print "Avg ep reward", avg_ep_r, "epsilon", epsilon, "Average q", avg_q
-                summary.write_summary({'episode_avg_reward': avg_ep_r, 'avg_q_value': avg_q}, Tq)
+                avg_val = np.mean(episode_vals)
+                print "Avg ep reward", avg_ep_r, "epsilon", epsilon, "Average value", avg_val
+                summary.write_summary({'episode_avg_reward': avg_ep_r, 'avg_value': avg_val}, Tq)
     global training_finished
     training_finished = True
 
 def estimate_reward(agent, env, episodes=10):
     episode_rewards = []
-    episode_qs = []
+    episode_vals = []
     for i in range(episodes):
         episode_reward = 0
         state = env.reset()
         terminal = False
         while not terminal:
-            q_vals = agent.get_q_vals(state)
-            state, reward, terminal, _ = env.step(np.argmax(q_vals))
-            episode_qs.append(np.max(q_vals))
+            policy = agent.get_policy(state)
+            value = agent.get_value(state)
+            action_idx = np.random.choice(agent.action_size, p=policy)
+            state, reward, terminal, _ = env.step(action_idx)
+            episode_vals.append(value)
             episode_reward += reward
         episode_rewards.append(episode_reward)
-    return episode_rewards, episode_qs
+    return episode_rewards, episode_vals
 
 def a3c(game_name, nb_threads=8):
     processes = []
@@ -261,8 +264,9 @@ def a3c(game_name, nb_threads=8):
         agent = Agent(session=sess, action_size=envs[0].action_size,
         h=84, w=84, channels=STATE_FRAMES,
         optimizer=tf.train.AdamOptimizer(INITIAL_LEARNING_RATE))
+
         sess.run(tf.global_variables_initializer())
-        
+
         summary = Summary('tensorboard', agent)
 
         for i in range(NUM_THREADS):
