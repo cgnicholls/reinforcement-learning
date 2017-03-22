@@ -44,13 +44,14 @@ from keras.models import Model
 # FLAGS
 ENTROPY_FACTOR = 0.01
 T_MAX = 100000000
-NUM_THREADS = 1
+NUM_THREADS = 8
 STATE_FRAMES = 4
-INITIAL_LEARNING_RATE = 1e-4
+INITIAL_LEARNING_RATE = 1e-5 # With Adam, a learning rate of 1e-4 or higher
+# seems to give nans.
 DISCOUNT_FACTOR = 0.99
 VERBOSE_EVERY = 2000
-EPSILON_STEPS = 1000#4000000
-TESTING = False
+EPSILON_STEPS = 4000000
+TESTING = True
 
 I_ASYNC_UPDATE = 5
 
@@ -120,9 +121,17 @@ class Agent():
             # Note the negative entropy term, which encourages exploration:
             # higher entropy corresponds to less certainty.
             self.loss = 0.5 * self.value_loss + self.policy_loss - self.entropy * ENTROPY_FACTOR
+
+            # Compute the gradient of the loss with respect to all the weights,
+            # and create a list of tuples consisting of the gradient to apply to
+            # the weight.
             grads = tf.gradients(self.loss, self.weights)
             grads, _ = tf.clip_by_global_norm(grads, 40.0)
             grads_vars = list(zip(grads, self.weights))
+
+            # Create an operator to apply the gradients using the optimizer.
+            # Note that apply_gradients is the second part of minimize() for the
+            # optimizer, so will minimize the loss.
             self.train_op = optimizer.apply_gradients(grads_vars)
 
     def get_policy(self, state):
@@ -141,8 +150,8 @@ class Agent():
             self.advantages: advantages
         })
         if TESTING:
-            advantages, log_policy, policy_loss, value_loss, entropy, loss, _ =\
-            self.sess.run([self.advantages, self.log_pi_for_action,
+            advantages, log_policy, policy, policy_loss, value_loss, entropy, loss = \
+            self.sess.run([self.advantages, self.log_pi_for_action, self.policy,
             self.policy_loss, self.value_loss, self.entropy, self.loss],
             feed_dict={
                 self.state: states,
@@ -150,10 +159,13 @@ class Agent():
                 self.target_value: target_values,
                 self.advantages: advantages
             })
-            print "loss", loss
-            print "policy_loss", policy_loss, "value_loss", \
-            value_loss, "entropy", entropy, "loss", loss
-            print "Advantages", advantages, "log policy", log_policy
+            if np.isnan(loss):
+                print "loss", loss
+                print "Policy", policy
+                print "policy_loss", policy_loss, "value_loss", \
+                value_loss, "entropy", entropy, "loss", loss
+                print "Advantages", advantages, "log policy", log_policy
+            assert not np.isnan(loss)
 
     # Builds the DQN model as in Mnih, but we get a softmax output for the
     # policy from fc1 and a linear output for the value from fc1.
