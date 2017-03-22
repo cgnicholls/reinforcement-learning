@@ -46,10 +46,10 @@ ENTROPY_FACTOR = 0.01
 T_MAX = 100000000
 NUM_THREADS = 8
 STATE_FRAMES = 4
-INITIAL_LEARNING_RATE = 1e-5 # With Adam, a learning rate of 1e-4 or higher
+INITIAL_LEARNING_RATE = 1e-3 # With Adam, a learning rate of 1e-4 or higher
 # seems to give nans.
 DISCOUNT_FACTOR = 0.99
-VERBOSE_EVERY = 2000
+VERBOSE_EVERY = 40000
 EPSILON_STEPS = 4000000
 TESTING = True
 
@@ -69,16 +69,22 @@ class Agent():
         with tf.variable_scope('network'):
             self.action = tf.placeholder('int32', [None], name='action')
             self.target_value = tf.placeholder('float32', [None], name='target_value')
-            self.weights, self.state, self.policy, self.value = self.build_model(h, w, channels)
+            self.state, self.policy, self.value = self.build_model(h, w, channels)
+            self.weights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
+            scope='network')
             self.advantages = tf.placeholder('float32', [None], name='advantages')
 
         with tf.variable_scope('optimizer'):
             # Compute the one hot vectors for each action given.
             action_one_hot = tf.one_hot(self.action, self.action_size, 1.0, 0.0)
 
+            min_policy = 1e-8
+            max_policy = 1.0 - 1e-8
+            self.log_policy = tf.log(tf.clip_by_value(self.policy, 0.000001, 0.999999))
+
             # For a given state and action, compute the log of the policy at
             # that action for that state. This also works on batches.
-            self.log_pi_for_action = tf.reduce_sum(tf.multiply(tf.log(self.policy), action_one_hot), reduction_indices=1)
+            self.log_pi_for_action = tf.reduce_sum(tf.multiply(self.log_policy, action_one_hot), reduction_indices=1)
 
             # Takes in R_t - V(s_t) as in the async paper. Note that we feed in
             # the advantages so that V(s_t) is treated as a constant for the
@@ -113,7 +119,7 @@ class Agent():
             # distribution is more concentrated on one action, so a larger
             # entropy implies more exploration. Thus we penalise small entropy,
             # or equivalently, add -entropy to our loss.
-            self.entropy = tf.reduce_sum(tf.multiply(self.policy, -tf.log(self.policy)))
+            self.entropy = tf.reduce_sum(tf.multiply(self.policy, -self.log_policy))
 
             # Try to minimise the loss. There is some rationale for choosing the
             # weighted linear combination here that I found somewhere else that
@@ -169,25 +175,45 @@ class Agent():
 
     # Builds the DQN model as in Mnih, but we get a softmax output for the
     # policy from fc1 and a linear output for the value from fc1.
-    def build_model(self, h, w, channels, hidden_size=256):
-        model_input = Input(shape=(h,w,channels,))
-        conv1 = Convolution2D(nb_filter=16, nb_row=8, nb_col=8, subsample=(4,4), activation='relu', border_mode='same', dim_ordering='tf')(model_input)
-        conv2 = Convolution2D(nb_filter=32, nb_row=4, nb_col=4, subsample=(2,2), activation='relu', border_mode='same', dim_ordering='tf')(conv1)
-
-        flatten = Flatten()(conv2)
-        fc1 = Dense(output_dim=hidden_size, activation='relu')(flatten)
-        policy = Dense(output_dim=self.action_size, activation='softmax')(fc1)
-        value = Dense(output_dim=1, activation='linear')(fc1)
-
-        # Store the inputs and outputs in the model
-        model = Model(input=model_input, outputs=[policy, value])
-        trainable_weights = model.trainable_weights
-
+    def build_model(self, h, w, channels):
         state = tf.placeholder('float32', shape=(None, h, w, channels), name='state')
-        policy_out, value_out = model(state)
+        # First convolutional layer
+        conv1 = tf.contrib.layers.convolution2d(inputs=state, num_outputs=16,
+        kernel_size=[8,8], stride=[4,4], padding="SAME",
+        activation_fn=tf.nn.relu,
+        weights_initializer=tf.contrib.layers.xavier_initializer_conv2d(),
+        biases_initializer=tf.zeros_initializer())
+        
+        # Second convolutional layer
+        conv2 = tf.contrib.layers.convolution2d(inputs=state, num_outputs=32,
+        kernel_size=[4,4], stride=[2,2], padding="SAME",
+        activation_fn=tf.nn.relu,
+        weights_initializer=tf.contrib.layers.xavier_initializer_conv2d(),
+        biases_initializer=tf.zeros_initializer())
+
+        # Flatten the network
+        flatten = tf.contrib.layers.flatten(inputs=conv2)
+
+        # Fully connected layer with 256 hidden units
+        fc1 = tf.contrib.layers.fully_connected(inputs=flatten, num_outputs=256,
+        activation_fn=tf.nn.relu,
+        weights_initializer=tf.contrib.layers.xavier_initializer(),
+        biases_initializer=tf.zeros_initializer())
+        
+        # The policy output
+        policy = tf.contrib.layers.fully_connected(inputs=fc1,
+        num_outputs=self.action_size, activation_fn=tf.nn.softmax,
+        weights_initializer=tf.contrib.layers.xavier_initializer(),
+        biases_initializer=tf.zeros_initializer())
+
+        # The value output
+        value = tf.contrib.layers.fully_connected(inputs=fc1, num_outputs=1,
+        activation_fn=None,
+        weights_initializer=tf.contrib.layers.xavier_initializer(),
+        biases_initializer=tf.zeros_initializer())
 
         # Actually evaluate the inputs 
-        return trainable_weights, state, policy_out, value_out
+        return state, policy, value
 
 class Summary:
     def __init__(self, logdir, agent):
