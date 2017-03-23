@@ -3,7 +3,7 @@ import gym
 import numpy as np
 import random
 
-class GymWrapper:
+class CustomGym:
     def __init__(self, env, skip_actions=4, nb_frames=4, w=84, h=84):
         self.env = env
         self.nb_frames = nb_frames

@@ -24,6 +24,7 @@
 #       clear gradients dtheta <- 0
 # until T > T_max
 
+import os
 import sys
 import multiprocessing
 import threading
@@ -33,468 +34,230 @@ from time import sleep
 import gym
 import Queue
 import custom_gridworld as custom
+from gym_wrap import GymWrapper
+import random
+
+random.seed(100)
+
+os.environ["KERAS_BACKEND"] = "tensorflow"
+from keras import backend as K
+from keras.layers import Convolution2D, Flatten, Dense, Input
+from keras.models import Model
 
 CUSTOM_PONG_SIZE = 15
 T_MAX = 100000000
 ACTIONS = [0,1]
 NUM_ACTIONS = len(ACTIONS)
-RESIZED_SCREEN_X = 80
-RESIZED_SCREEN_Y = 80
-STATE_FRAMES = 2
+NUM_THREADS = 8
+STATE_FRAMES = 4
 INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
-SKIP_ACTIONS = 1
-VERBOSE_EVERY = 10000
-EPSILON_STEPS = 1000000
+SKIP_ACTIONS = 4
+VERBOSE_EVERY = 40000
+EPSILON_STEPS = 4000000
 
 I_TARGET = 40000
 I_ASYNC_UPDATE = 5
 
-class NetworkDeepmind():
-    def __init__(self, game_name, scope, trainer):
-        self.scope = scope
-        with tf.variable_scope(self.scope):
-            if game_name == 'custom':
-                self.create_network_custom_contrib(CUSTOM_PONG_SIZE)
-            elif game_name == 'CartPole-v0':
-                self.create_network_cart_pole()
+training_finished = False
+
+class Agent():
+    def __init__(self, session, action_size, h, w, channels, optimizer=tf.train.AdamOptimizer(1e-4)):
+        self.action_size = action_size
+        self.optimizer = optimizer
+        self.sess = session
+        K.set_session(self.sess)
+
+        with tf.variable_scope('online_network'):
+            self.action = tf.placeholder('int32', [None], name='action')
+            self.reward = tf.placeholder('float32', [None], name='reward')
+            model, self.state, self.q_vals = self._build_model(h, w, channels)
+            self.weights = model.trainable_weights
+
+        with tf.variable_scope('optimizer'):
+            action_one_hot = tf.one_hot(self.action, self.action_size, 1.0, 0.0)
+            q_val = tf.reduce_sum(tf.multiply(self.q_vals, action_one_hot), reduction_indices=1)
+            self.loss = tf.reduce_mean(tf.square(self.reward - q_val))
+            grads = tf.gradients(self.loss, self.weights)
+            grads, _ = tf.clip_by_global_norm(grads, 40.0)
+            grads_vars = list(zip(grads, self.weights))
+            self.train_op = optimizer.apply_gradients(grads_vars)
+        with tf.variable_scope('target_network'):
+            target_model, self.target_state, self.target_q_vals = self._build_model(h, w, channels)
+            target_weights = target_model.trainable_weights
+        with tf.variable_scope('target_update'):
+            self.target_update = [target_weights[i].assign(self.weights[i]) for i in range(len(target_weights))]
+
+    def update_target(self):
+        self.sess.run(self.target_update)
+    
+    def get_q_vals(self, state):
+        return self.sess.run(self.q_vals, {self.state: state}).flatten()
+
+    def get_target_q_vals(self, state):
+        return np.max(self.sess.run(self.target_q_vals,
+        feed_dict={self.target_state: state}).flatten())
+
+    # Train the network on the given states and rewards
+    def train(self, states, actions, rewards):
+        self.sess.run(self.train_op, feed_dict={
+            self.state: states,
+            self.action: actions,
+            self.reward: rewards
+        })
+
+    # Builds the DQN model as in Mnih.
+    def _build_model(self, h, w, channels, hidden_size=256):
+        state = tf.placeholder('float32', shape=(None, h, w, channels), name='state')
+        inputs = Input(shape=(h,w,channels,))
+        model = Convolution2D(nb_filter=16, nb_row=8, nb_col=8, subsample=(4,4), activation='relu', border_mode='same', dim_ordering='tf')(inputs)
+        model = Convolution2D(nb_filter=32, nb_row=4, nb_col=4, subsample=(2,2), activation='relu', border_mode='same', dim_ordering='tf')(model)
+
+        model = Flatten()(model)
+        model = Dense(output_dim=hidden_size, activation='relu')(model)
+        out = Dense(output_dim=self.action_size, activation='linear')(model)
+        model = Model(input=inputs, output=out)
+        q_vals = model(state)
+        return model, state, q_vals
+
+class Summary:
+    def __init__(self, logdir, agent):
+        with tf.variable_scope('summary'):
+            summarising = ['episode_avg_reward', 'avg_q_value']
+            self.agent = agent
+            self.writer = tf.summary.FileWriter(logdir, self.agent.sess.graph)
+            self.summary_ops = {}
+            self.summary_vars = {}
+            self.summary_ph = {}
+            for s in summarising:
+                self.summary_vars[s] = tf.Variable(0.0)
+                self.summary_ph[s] = tf.placeholder('float32', name=s)
+                self.summary_ops[s] = tf.summary.scalar(s, self.summary_vars[s])
+            self.update_ops = []
+            for k in self.summary_vars:
+                self.update_ops.append(self.summary_vars[k].assign(self.summary_ph[k]))
+            self.summary_op = tf.summary.merge(list(self.summary_ops.values()))
+            
+    def write_summary(self, summary, t):
+        self.agent.sess.run(self.update_ops, {self.summary_ph[k]: v for k, v in summary.items()})
+        summary_to_add = self.agent.sess.run(self.summary_op, {self.summary_vars[k]: v for k, v in summary.items()})
+        self.writer.add_summary(summary_to_add, global_step=t)
+        
+
+def get_epsilon(global_step, epsilon_steps, epsilon_min):
+    epsilon = 1.0 - float(global_step) / float(epsilon_steps) * (1.0 - epsilon_min)
+    return epsilon if epsilon > epsilon_min else epsilon_min
+
+def async_trainer(agent, env, sess, thread_idx, T_queue, summary):
+    print "Training thread", thread_idx
+    # Choose a minimum epsilon once and for all for this agent.
+    Tq = T_queue.get()
+    T_queue.put(Tq+1)
+    epsilon_min = random.choice(4*[0.1] + 3*[0.01] + 3*[0.5])
+    epsilon = get_epsilon(Tq, EPSILON_STEPS, epsilon_min)
+
+    last_verbose = Tq
+    last_target_update = Tq
+
+    terminal = True
+    while Tq < T_MAX:
+        batch_states = []
+        batch_rewards = []
+        batch_actions = []
+
+        if terminal:
+            terminal = False
+            state = env.reset()
+
+        while not terminal and len(batch_states) < I_ASYNC_UPDATE:
+            Tq = T_queue.get()
+            T_queue.put(Tq+1)
+            batch_states.append(state)
+            
+            if random.random() < epsilon:
+                action_idx = random.randrange(agent.action_size)
             else:
-                self.create_network()
+                q_vals = agent.get_q_vals(state)
+                action_idx = np.argmax(q_vals)
+
+            # Take the action
+            state, reward, terminal, _ = env.step(action_idx)
+            reward = np.clip(reward, -1, 1)
             
-            # We need ops for training for the worker networks.
-            if scope != 'global_network' and scope != 'target_network':
-                self.action = tf.placeholder(shape=[None], dtype=tf.int32)
-                self.one_hot_actions = tf.one_hot(self.action, NUM_ACTIONS,
-                dtype=tf.float32)
+            if not terminal:
+                target_q_vals = agent.get_target_q_vals(state)
+                reward += DISCOUNT_FACTOR * agent.get_target_q_vals(state)
 
-                # Need the target network to compute this.
-                self.q_for_action = tf.reduce_sum(self.output_layer * self.one_hot_actions, reduction_indices=1)
-                self.target = tf.placeholder(shape=[None], dtype=tf.float32)
-                self.loss = tf.reduce_mean(tf.square(self.target - self.q_for_action))
-                
-                # Get the gradients from the worker network using losses
-                local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
-                self.gradients = tf.gradients(self.loss, local_vars)
-                self.trainer = trainer
+            batch_rewards.append(reward)
+            batch_actions.append(action_idx)
 
-                self.grads_and_vars = trainer.compute_gradients(self.loss, local_vars)
+        # Apply asynchronous gradient update
+        agent.train(np.vstack(batch_states), batch_actions, batch_rewards)
 
-                # The operator for applying worker gradients to global network
-                global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global_network')
-                self.apply_grads = trainer.apply_gradients(zip(self.gradients, global_vars))
+        # Anneal epsilon
+        epsilon = get_epsilon(Tq, EPSILON_STEPS, epsilon_min)
 
-    def create_network_cart_pole(self, initial_stddev=1.0, initial_bias=0.1):
-        self.input_layer = tf.placeholder("float", [None, 4])
-        fc1_W = tf.Variable(tf.truncated_normal([4, 32],
-        stddev=initial_stddev/np.sqrt(4)))
-        fc1_b = tf.Variable(tf.constant(initial_bias, shape=[32]))
-        fc1 = tf.nn.tanh(tf.matmul(self.input_layer, fc1_W) + fc1_b)
+        if thread_idx == 0:
+            if Tq - last_target_update >= I_TARGET:
+                print "Worker", thread_idx, "T", Tq, "Updating target"
+                last_target_update = Tq
+                agent.update_target()
 
-        fc2_W = tf.Variable(tf.truncated_normal([32, 2],
-        stddev=initial_stddev/np.sqrt(32)))
-        fc2_b = tf.Variable(tf.constant(initial_bias, shape=[2]))
-        fc2 = tf.matmul(fc1, fc2_W) + fc2_b
+            if Tq - last_verbose >= VERBOSE_EVERY and terminal:
+                print "Worker", thread_idx, "T", Tq, "Evaluating agent"
+                last_verbose = Tq
+                episode_rewards, episode_qs = estimate_reward(agent, env, episodes=5)
+                avg_ep_r = np.mean(episode_rewards)
+                avg_q = np.mean(episode_qs)
+                print "Avg ep reward", avg_ep_r, "epsilon", epsilon, "Average q", avg_q
+                summary.write_summary({'episode_avg_reward': avg_ep_r, 'avg_q_value': avg_q}, Tq)
+    global training_finished
+    training_finished = True
 
-        self.output_layer = fc2
+def estimate_reward(agent, env, episodes=10):
+    episode_rewards = []
+    episode_qs = []
+    for i in range(episodes):
+        episode_reward = 0
+        state = env.reset()
+        terminal = False
+        while not terminal:
+            q_vals = agent.get_q_vals(state)
+            state, reward, terminal, _ = env.step(np.argmax(q_vals))
+            episode_qs.append(np.max(q_vals))
+            episode_reward += reward
+        episode_rewards.append(episode_reward)
+    return episode_rewards, episode_qs
 
-    def create_network_custom_contrib(self, input_size):
-        
-        self.input_layer = tf.placeholder("float", [None, input_size,
-        input_size, STATE_FRAMES])
-
-        conv1 = tf.layers.conv2d(
-            inputs=self.input_layer,
-            filters=16,
-            kernel_size=[4, 4],
-            activation=tf.nn.relu,
-            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
-
-        conv2 = tf.layers.conv2d(
-            inputs=conv1,
-            filters=32,
-            kernel_size=[4, 4],
-            activation=tf.nn.relu,
-            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
-
-        # If you change the size of the Pong game, you will have to change this
-        # number.
-        flatten = tf.reshape(conv2, [-1, 2592])
-
-        fc1 = tf.layers.dense(inputs=flatten, units=256, activation=tf.nn.relu,
-            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
-        fc2 = tf.layers.dense(inputs=fc1, units=256, activation=tf.nn.relu,
-            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
-        self.output_layer = tf.layers.dense(inputs=fc2, units=NUM_ACTIONS, activation=tf.identity, kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
-
-        
-    def create_network_custom(self, initial_stddev=1.0, initial_bias=0.1):
-        
-        self.input_layer = tf.placeholder("float", [None, 10,
-            10, STATE_FRAMES])
-
-        fan_in1 = 8 * 8 * STATE_FRAMES
-        conv1_W = tf.Variable(tf.truncated_normal([8, 8, STATE_FRAMES, 16],
-            stddev=initial_stddev/np.sqrt(fan_in1)))
-        conv1_b = tf.Variable(tf.constant(initial_bias, shape=[16]))
-        conv1 = tf.nn.relu(tf.nn.conv2d(self.input_layer, conv1_W,
-            strides=[1,4,4,1], padding="SAME") + conv1_b) 
-
-        fan_in2 = 3 * 3 * 16
-        conv2_W = tf.Variable(tf.truncated_normal([3, 3, 16, 32],
-        stddev=initial_stddev/np.sqrt(fan_in2)))
-        conv2_b = tf.Variable(tf.constant(initial_bias, shape=[32]))
-        conv2 = tf.nn.relu(tf.nn.conv2d(conv1, conv2_W, strides=[1,2,2,1],
-            padding="VALID") + conv2_b)
-
-        flatten = tf.reshape(conv2, [-1, 32])
-        
-        fan_in3 = 32
-        fc1_W = tf.Variable(tf.truncated_normal([fan_in3, 256],
-        stddev=initial_stddev/np.sqrt(fan_in3)))
-        fc1_b = tf.Variable(tf.constant(initial_bias, shape=[256]))
-        fc1 = tf.nn.relu(tf.matmul(flatten, fc1_W) + fc1_b)
-        
-        fan_in4 = 256
-        fc2_W = tf.Variable(tf.truncated_normal([256, NUM_ACTIONS],
-        stddev=initial_stddev/np.sqrt(fan_in4)))
-        fc2_b = tf.Variable(tf.constant(initial_bias, shape=[NUM_ACTIONS]))
-
-        self.output_layer = tf.matmul(fc1, fc2_W) + fc2_b
-
-    def create_network(self, initial_stddev=1.0, initial_bias=0.1):
-        self.input_layer = tf.placeholder("float", [None, RESIZED_SCREEN_X,
-            RESIZED_SCREEN_Y, STATE_FRAMES])
-
-        fan_in1 = 8 * 8 * STATE_FRAMES
-        conv1_W = tf.Variable(tf.truncated_normal([8, 8, STATE_FRAMES, 16],
-            stddev=initial_stddev/np.sqrt(fan_in1)))
-        conv1_b = tf.Variable(tf.constant(initial_bias, shape=[16]))
-        conv1 = tf.nn.relu(tf.nn.conv2d(self.input_layer, conv1_W,
-            strides=[1,4,4,1], padding="SAME") + conv1_b) 
-
-        fan_in2 = 4 * 4 * 16
-        conv2_W = tf.Variable(tf.truncated_normal([4, 4, 16, 32],
-        stddev=initial_stddev/np.sqrt(fan_in2)))
-        conv2_b = tf.Variable(tf.constant(initial_bias, shape=[32]))
-        conv2 = tf.nn.relu(tf.nn.conv2d(conv1, conv2_W, strides=[1,2,2,1],
-            padding="VALID") + conv2_b)
-
-        fan_in3 = 2592
-        flatten = tf.reshape(conv2, [-1, fan_in3])
-        
-        fc1_W = tf.Variable(tf.truncated_normal([fan_in3, 256],
-        stddev=initial_stddev/np.sqrt(fan_in3)))
-        fc1_b = tf.Variable(tf.constant(initial_bias, shape=[256]))
-        fc1 = tf.nn.relu(tf.matmul(flatten, fc1_W) + fc1_b)
-        
-        fan_in4 = 256
-        fc2_W = tf.Variable(tf.truncated_normal([256, NUM_ACTIONS],
-        stddev=initial_stddev/np.sqrt(fan_in4)))
-        fc2_b = tf.Variable(tf.constant(initial_bias, shape=[NUM_ACTIONS]))
-
-        self.output_layer = tf.matmul(fc1, fc2_W) + fc2_b
-
-class Worker():
-    def __init__(self, name, game_name, T_queue, ep_r_queue, trainer,
-        target_network, global_network, merged, summary_writer, estimated_v):
-        self.grad_theta = None
-        self.t = 0
-        self.T_queue = T_queue
-        self.ep_r_queue = ep_r_queue
-        self.name = name
-        self.local_network = NetworkDeepmind(game_name, self.name, trainer)
-        self.target_network = target_network
-        self.trainer = trainer
-        self.update_local_network_ops = copy_network_params('global_network', self.name)
-        self.update_target_op = copy_network_params('global_network', 'target_network')
-        self.game_name = game_name
-        if game_name == 'custom':
-            self.env = custom.Pong(CUSTOM_PONG_SIZE)
-            self.actions = [0,1]
-        else:
-            self.env = gym.make(game_name)
-            self.actions = [0,1]
-            if game_name == 'Pong-v0':
-                self.actions = [2,3]
-
-        self.global_network = global_network
-        self.merged = merged
-        self.summary_writer = summary_writer
-        self.estimated_v = estimated_v
-
-    # First step is to implement one thread and get it running on its own.
-    def work(self, sess, coordinator):
-        print "Starting worker " + self.name
-
-        with sess.as_default(), sess.graph.as_default():
-            # First make a copy of the global parameters for our worker's
-            # network.
-            sess.run(self.update_local_network_ops)
-            # Also make sure that the target network is initialised the same
-            # as the global network
-            sess.run(self.update_target_op)
-
-            # Start a new episode
-            obs = self.env.reset()
-            current_state = compute_state(self.game_name, None, obs)
-            episode_rewards = []
-            episode_reward = 0
-
-            initial_epsilons = np.array([1.0, 1.0, 1.0])
-            final_epsilons = np.array([0.1, 0.01, 0.5])
-            epsilons = initial_epsilons
-
-            batch_states = []
-            batch_as = []
-            batch_ys = []
-
-            last_action = None
-            while not coordinator.should_stop():
-
-                epsilon = np.random.choice(epsilons, p=[0.4,0.3,0.3])
-
-                while True:
-                    is_training_step = self.t % SKIP_ACTIONS == 0 or last_action == None
-                    Tq = self.T_queue.get()
-                    if is_training_step:
-                        # Add one to the global number of steps
-                        self.T_queue.put(Tq+1)
-
-                        # Update epsilons
-                        epsilons = np.max([initial_epsilons - float(Tq)*(initial_epsilons-final_epsilons)/float(EPSILON_STEPS), final_epsilons], axis=0)
-                        if np.random.rand() < epsilon:
-                            a = np.random.choice(self.actions)
-                        else:
-                            qs = sess.run(self.local_network.output_layer, feed_dict={
-                                self.local_network.input_layer: [current_state]
-                            })
-                            a = self.actions[np.argmax(qs)]
-                        # Set last action
-                        last_action = a
-                    else:
-                        a = last_action
-                    
-                    obs, reward, done, info = self.env.step(a)
-
-                    next_state = compute_state(self.game_name, current_state, obs)
-
-                    episode_reward += reward
-
-                    if is_training_step:
-                        y = reward
-                        if not done:
-                            # Compute Q-value wrt theta_target
-                            next_q_target = sess.run(self.target_network.output_layer, feed_dict={
-                                self.target_network.input_layer: [next_state]
-                            })
-                            next_q = sess.run(self.local_network.output_layer, 
-                            feed_dict={
-                                self.local_network.input_layer: [next_state]
-                            })
-                            y += DISCOUNT_FACTOR * np.max(next_q_target)
-                        
-                        # Add state, action and y to the batch
-                        batch_states.append(current_state)
-                        batch_as.append(a)
-                        batch_ys.append(y)
-                    
-                    if len(batch_states) == I_ASYNC_UPDATE:
-                        # Compute the gradient of the loss and update the global
-                        # theta
-                        sess.run(self.local_network.apply_grads, feed_dict={
-                            self.local_network.input_layer: batch_states, 
-                            self.local_network.action: batch_as,
-                            self.local_network.target: batch_ys 
-                        })
-
-                        # Reset our batch
-                        batch_states = []
-                        batch_as = []
-                        batch_ys = []
-
-                        # Get a new copy of the global theta
-                        sess.run(self.update_local_network_ops)
-
-                    self.t += 1
-
-                    if Tq % VERBOSE_EVERY == 0:
-                        recent_ep_rewards = []
-                        while not self.ep_r_queue.empty():
-                            recent_ep_rewards.append(self.ep_r_queue.get())
-                        if len(recent_ep_rewards) > 0:
-                            print "T", Tq, self.name, "Episode rewards", np.mean(recent_ep_rewards)
-                        else:
-                            print "T", Tq, self.name, "No episode rewards yet"
-
-                    #if self.t % VERBOSE_EVERY == 0 and len(episode_rewards) > 0:
-                    #    print "T", Tq, self.name, "Average episode reward", np.mean(episode_rewards), "average last 5:", np.mean(episode_rewards[-5:])
-
-                    if done:
-                        obs = self.env.reset()
-                        current_state = compute_state(self.game_name, None, obs)
-                        episode_rewards.append(episode_reward)
-                        self.ep_r_queue.put(episode_reward)
-                        episode_reward = 0
-
-                        # Choose new epsilon
-                        epsilon = np.random.choice(epsilons, p=[0.4,0.3,0.3])
-                    else:
-                        current_state = next_state
-
-                    if is_training_step and Tq % I_TARGET == 0:
-                        print "Estimating value, T = ", Tq
-                        #p = multiprocessing.Process(target=estimate_value, args=(sess, self.game_name, self.global_network))
-                        #p.start()
-                        #p.join()
-                        estimated_v = estimate_value(sess, self.game_name, self.global_network)
-                        summary = sess.run(self.merged, feed_dict={
-                            self.estimated_v: estimated_v
-                        })
-                        self.summary_writer.add_summary(summary, Tq)
-                            
-
-                    if is_training_step and Tq % I_TARGET == 0:
-                        print "T", Tq, "Updating target network"
-                        sess.run(self.update_target_op)
-
-                    if Tq > T_MAX:
-                        return
-
-                    if done:
-                        break
-
-# If current_state is None then just repeat the observation STATE_FRAMES times.
-# Otherwise, remove the first frame, and append obs to get the new current
-# state.
-def compute_state(game_name, current_state, obs):
-    if game_name == 'CartPole-v0':
-        return obs
-    elif game_name != 'custom':
-        # Preprocess the observation if it's an ATARI game.
-        obs = preprocess(obs)
-
-    if current_state is None:
-        state = np.stack(tuple(obs for i in range(STATE_FRAMES)), axis=2)
-    else:
-        # obs is two-dimensional, so insert a dummy third dimension
-        state = np.append(current_state[:,:,1:], obs[:,:,np.newaxis], axis=2)
-    return state
-
-# Preprocess the observation to remove noise.
-def preprocess(obs):
-    return obs
-    # Convert to float
-    obs = obs.astype('float32')
-
-    # Crop screen and set to grayscale
-    obs = obs[34:194,:,0]
-
-    # Downsize screen
-    obs = obs[::2,::2]
-
-    # Normalise input to 0-1 values
-    obs = obs / 255.0 - 0.5
-
-    return obs
-            
-# Copies the parameters from the from network to the to network.
-def copy_network_params(from_scope, to_scope):
-    from_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, from_scope)
-    to_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, to_scope)
-
-    ops = []
-    for from_var,to_var in zip(from_vars, to_vars):
-        ops.append(to_var.assign(from_var))
-    return ops
-
-def async_q_learn(game_name, num_workers=16):
-    print "Using", num_workers, "workers"
-    tf.reset_default_graph()
-
-    trainer = tf.train.AdamOptimizer(learning_rate=INITIAL_LEARNING_RATE)
-    global_network = NetworkDeepmind(game_name, 'global_network', None)
-    target_network = NetworkDeepmind(game_name, 'target_network', None)
+def qlearn(game_name, nb_threads=8):
+    processes = []
+    envs = []
+    for _ in range(nb_threads):
+        gym_env = gym.make(game_name)
+        env = GymWrapper(gym_env)
+        envs.append(env)
 
     T_queue = Queue.Queue()
     T_queue.put(0)
 
-    ep_r_queue = Queue.Queue()
-
-    estimated_v = tf.placeholder('float')
-    tf.summary.scalar('estimated_v', estimated_v)
-
-    merged = tf.summary.merge_all()
-    summary_writer = tf.summary.FileWriter('tensorboard/')
-
-    # Create num_workers workers
-    workers = []
-    for i in range(num_workers):
-        workers.append(Worker('worker_'+str(i), game_name, T_queue, ep_r_queue,
-        trainer, target_network, global_network, merged, summary_writer,
-        estimated_v))
-
     with tf.Session() as sess:
-        coordinator = tf.train.Coordinator()
-
-        # Initialise all variables
+        agent = Agent(session=sess, action_size=envs[0].action_size,
+        h=84, w=84, channels=STATE_FRAMES,
+        optimizer=tf.train.AdamOptimizer(INITIAL_LEARNING_RATE))
         sess.run(tf.global_variables_initializer())
         
-        # Start the work of each worker in a separate thread.
-        worker_threads = []
-        for worker in workers:
-            work = lambda: worker.work(sess, coordinator)
-            t = threading.Thread(target=(work))
-            t.start()
-            sleep(0.5)
-            worker_threads.append(t)
-        coordinator.join(worker_threads)
+        summary = Summary('tensorboard', agent)
 
-# Estimate the value of the global parameters
-def estimate_value(sess, game_name, global_network, max_episodes=5,
-    max_steps=4000):
-    if game_name == 'custom':
-        env = custom.Pong(CUSTOM_PONG_SIZE)
-    else:
-        env = gym.make(game_name)
-    obs = env.reset()
-    current_state = compute_state(game_name, None, obs)
-    episode_rewards = []
-    episode_reward = 0
-    ep = 0
-    t = 0
-    while ep < max_episodes:
-        qs = sess.run(global_network.output_layer, feed_dict={
-            global_network.input_layer: [current_state]
-        })
-        a = np.argmax(qs)
-        obs, reward, done, info = env.step(a)
-        next_state = compute_state(game_name, current_state, obs)
+        for i in range(NUM_THREADS):
+            processes.append(threading.Thread(target=async_trainer, args=(agent,
+            envs[i], sess, i, T_queue, summary,)))
+        for p in processes:
+            p.daemon = True
+            p.start()
 
-        episode_reward += reward
-        t += 1
-        if t >= max_steps:
-            break
+        while not training_finished:
+            sleep(0.01)
+        for p in processes:
+            p.join()
 
-        if done:
-            obs = env.reset()
-            current_state = compute_state(game_name, None, obs)
-            episode_rewards.append(episode_reward)
-            episode_reward = 0
-            ep += 1
-        else:
-            current_state = next_state
-
-    if len(episode_rewards) > 0:
-        estimated_v = np.mean(episode_rewards)
-    else:
-        estimated_v = episode_reward
-    print "Estimated value", estimated_v
-    return estimated_v
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        game_name = sys.argv[1]
-    else:
-        game_name = 'Pong-v0'
-    print "Trying to play", game_name
-    async_q_learn(game_name, num_workers=16)
+qlearn('SpaceInvaders-v0')

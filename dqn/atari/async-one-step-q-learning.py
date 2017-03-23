@@ -34,7 +34,7 @@ from time import sleep
 import gym
 import Queue
 import custom_gridworld as custom
-from gym_wrap import GymWrapper
+from custom_gym import CustomGym
 import random
 
 random.seed(100)
@@ -44,7 +44,6 @@ from keras import backend as K
 from keras.layers import Convolution2D, Flatten, Dense, Input
 from keras.models import Model
 
-CUSTOM_PONG_SIZE = 15
 T_MAX = 100000000
 ACTIONS = [0,1]
 NUM_ACTIONS = len(ACTIONS)
@@ -234,7 +233,7 @@ def qlearn(game_name, nb_threads=8):
     envs = []
     for _ in range(nb_threads):
         gym_env = gym.make(game_name)
-        env = GymWrapper(gym_env)
+        env = CustomGym(gym_env)
         envs.append(env)
 
     T_queue = Queue.Queue()
