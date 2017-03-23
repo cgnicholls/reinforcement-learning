@@ -29,6 +29,7 @@ import threading
 import tensorflow as tf
 import numpy as np
 from time import sleep
+from time import gmtime, strftime
 import gym
 import Queue
 from custom_gym import CustomGym
@@ -412,5 +413,7 @@ def discount(rewards, gamma):
 def test_equals(arr1, arr2, eps):
     return np.sum(np.abs(np.array(arr1)-np.array(arr2))) < eps
 
+checkpoint_file = 'model/model-' + strftime("%d-%m-%Y-%H:%M:%S", gmtime())
+print "Using checkpoint file", checkpoint_file
 a3c('SpaceInvaders-v0', nb_threads=NUM_THREADS, restore=False,
-checkpoint_file='model.chk')
+checkpoint_file=checkpoint_file)
