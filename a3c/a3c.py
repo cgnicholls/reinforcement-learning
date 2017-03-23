@@ -37,21 +37,18 @@ import random
 random.seed(100)
 
 os.environ["KERAS_BACKEND"] = "tensorflow"
-from keras import backend as K
-from keras.layers import Convolution2D, Flatten, Dense, Input
-from keras.models import Model
 
 # FLAGS
 ENTROPY_FACTOR = 0.01
 T_MAX = 100000000
 NUM_THREADS = 8
 STATE_FRAMES = 4
-INITIAL_LEARNING_RATE = 1e-3 # With Adam, a learning rate of 1e-4 or higher
+INITIAL_LEARNING_RATE = 1e-4 # With Adam, a learning rate of 1e-4 or higher
 # seems to give nans.
 DISCOUNT_FACTOR = 0.99
-VERBOSE_EVERY = 40000
+VERBOSE_EVERY = 10000
 EPSILON_STEPS = 4000000
-TESTING = True
+TESTING = False
 
 I_ASYNC_UPDATE = 5
 
@@ -64,7 +61,6 @@ class Agent():
         self.action_size = action_size
         self.optimizer = optimizer
         self.sess = session
-        K.set_session(self.sess)
 
         with tf.variable_scope('network'):
             self.action = tf.placeholder('int32', [None], name='action')
@@ -243,7 +239,8 @@ def get_epsilon(global_step, epsilon_steps, epsilon_min):
     epsilon = 1.0 - float(global_step) / float(epsilon_steps) * (1.0 - epsilon_min)
     return epsilon if epsilon > epsilon_min else epsilon_min
 
-def async_trainer(agent, env, sess, thread_idx, T_queue, summary):
+def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
+    checkpoint_file):
     print "Training thread", thread_idx
     # Choose a minimum epsilon once and for all for this agent.
     T = T_queue.get()
@@ -346,6 +343,8 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary):
                 avg_val = np.mean(episode_vals)
                 print "Avg ep reward", avg_ep_r, "epsilon", epsilon, "Average value", avg_val
                 summary.write_summary({'episode_avg_reward': avg_ep_r, 'avg_value': avg_val}, T)
+                print "Saving"
+                saver.save(sess, checkpoint_file, global_step=T)
     global training_finished
     training_finished = True
 
@@ -366,7 +365,9 @@ def estimate_reward(agent, env, episodes=10):
         episode_rewards.append(episode_reward)
     return episode_rewards, episode_vals
 
-def a3c(game_name, nb_threads=8):
+# If restore is True, then start the model from the most recent checkpoint.
+# Else initialise as usual.
+def a3c(game_name, nb_threads=8, restore=False, checkpoint_file='model'):
     processes = []
     envs = []
     for _ in range(nb_threads):
@@ -382,13 +383,19 @@ def a3c(game_name, nb_threads=8):
         h=84, w=84, channels=STATE_FRAMES,
         optimizer=tf.train.AdamOptimizer(INITIAL_LEARNING_RATE))
 
-        sess.run(tf.global_variables_initializer())
+        # Create a saver, and only keep 2 checkpoints.
+        saver = tf.train.Saver(max_to_keep=2)
+
+        if restore:
+            saver.restore(sess, checkpoint_file)
+        else:
+            sess.run(tf.global_variables_initializer())
 
         summary = Summary('tensorboard', agent)
 
         for i in range(nb_threads):
             processes.append(threading.Thread(target=async_trainer, args=(agent,
-            envs[i], sess, i, T_queue, summary,)))
+            envs[i], sess, i, T_queue, summary, saver, checkpoint_file,)))
         for p in processes:
             p.daemon = True
             p.start()
@@ -405,4 +412,5 @@ def discount(rewards, gamma):
 def test_equals(arr1, arr2, eps):
     return np.sum(np.abs(np.array(arr1)-np.array(arr2))) < eps
 
-a3c('SpaceInvaders-v0', NUM_THREADS)
+a3c('SpaceInvaders-v0', nb_threads=NUM_THREADS, restore=False,
+checkpoint_file='model.chk')
