@@ -24,10 +24,10 @@ STATE_FRAMES = 4
 INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
 VERBOSE_EVERY = 10000
-EPSILON_STEPS = 400000
+EPSILON_STEPS = 4000000
 TESTING = False
 
-I_ASYNC_UPDATE = 20
+I_ASYNC_UPDATE = 5
 
 training_finished = False
 
@@ -79,6 +79,7 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
         batch_states = []
         batch_rewards = []
         batch_actions = []
+        baseline_values = []
 
         if terminal:
             terminal = False
@@ -88,12 +89,13 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
             # Save the current state
             batch_states.append(state)
             
+            # Choose an action randomly according to the policy
+            # probabilities. We do this anyway to prevent us having to compute
+            # the baseline value separately.
+            policy, value = agent.get_policy_and_value(state)
             if random.random() < epsilon:
                 action_idx = random.randrange(agent.action_size)
             else:
-                # Choose an action randomly according to the policy
-                # probabilities
-                policy = agent.get_policy(state)
                 action_idx = np.random.choice(agent.action_size, p=policy)
 
             # Take the action and get the next state, reward and terminal.
@@ -110,6 +112,7 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
             # Save the rewards and actions
             batch_rewards.append(reward)
             batch_actions.append(action_idx)
+            baseline_values.append(value[0])
 
         target_value = 0
         # If the last state was terminal, just put R = 0. Else we want the
@@ -142,11 +145,7 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
                 print test_batch_target_values
 
         # Compute the estimated value of each state
-        baseline_values = sess.run(agent.value, feed_dict={
-            agent.state: np.vstack(batch_states)
-            })
-        baseline_values = np.reshape(baseline_values, -1)
-        batch_advantages = batch_target_values - baseline_values
+        batch_advantages = np.array(batch_target_values) - np.array(baseline_values)
 
         # Apply asynchronous gradient update
         agent.train(np.vstack(batch_states), batch_actions, batch_target_values,
@@ -155,50 +154,72 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
         # Anneal epsilon
         epsilon = get_epsilon(T, EPSILON_STEPS, epsilon_min)
 
-        if thread_idx == 0:
-            if T - last_verbose >= VERBOSE_EVERY and terminal:
-                current_time = time()
-                print "Train steps per second", float(T - last_verbose) / (current_time - last_time)
-                last_time = current_time
-                print "Worker", thread_idx, "T", T, "Evaluating agent"
-                
-                last_verbose = T
-                episode_rewards, episode_vals = estimate_reward(agent, env, episodes=5)
-                avg_ep_r = np.mean(episode_rewards)
-                avg_val = np.mean(episode_vals)
-                print "Avg ep reward", avg_ep_r, "epsilon", epsilon, "Average value", avg_val
-                summary.write_summary({'episode_avg_reward': avg_ep_r, 'avg_value': avg_val}, T)
-                print "Saving"
-                saver.save(sess, checkpoint_file, global_step=T)
     global training_finished
     training_finished = True
 
-def estimate_reward(agent, env, episodes=10):
+def estimate_reward(agent, env, episodes=10, max_steps=10000):
     episode_rewards = []
     episode_vals = []
+    t = 0
     for i in range(episodes):
         episode_reward = 0
         state = env.reset()
         terminal = False
         while not terminal:
-            policy = agent.get_policy(state)
-            value = agent.get_value(state)
+            policy, value = agent.get_policy_and_value(state)
             action_idx = np.random.choice(agent.action_size, p=policy)
             state, reward, terminal, _ = env.step(action_idx)
+            t += 1
             episode_vals.append(value)
             episode_reward += reward
+            if t > max_steps:
+                episode_rewards.append(episode_reward)
+                return episode_rewards, episode_vals
         episode_rewards.append(episode_reward)
     return episode_rewards, episode_vals
+
+def evaluator(agent, env, sess, T_queue, summary, saver, checkpoint_file):
+    # Read T and put the same T back on.
+    T = 0
+    last_time = time()
+    last_verbose = T
+    while T < T_MAX:
+        T = T_queue.get()
+        T_queue.put(T)
+        if T - last_verbose >= VERBOSE_EVERY:
+            print "T", T, "last_verbose", last_verbose
+            current_time = time()
+            print "Train steps per second", float(T - last_verbose) / (current_time - last_time)
+            last_time = current_time
+            print "T", T, "Evaluating agent"
+            
+            last_verbose = T
+            episode_rewards, episode_vals = estimate_reward(agent, env, episodes=5)
+            avg_ep_r = np.mean(episode_rewards)
+            avg_val = np.mean(episode_vals)
+            print "Avg ep reward", avg_ep_r, "Average value", avg_val
+            summary.write_summary({'episode_avg_reward': avg_ep_r, 'avg_value': avg_val}, T)
+            print "Saving"
+            saver.save(sess, checkpoint_file, global_step=T)
+        sleep(1.0)
 
 # If restore is True, then start the model from the most recent checkpoint.
 # Else initialise as usual.
 def a3c(game_name, num_threads=8, restore=False, checkpoint_file='model'):
     processes = []
     envs = []
-    for _ in range(num_threads):
+    for _ in range(num_threads+1):
         gym_env = gym.make(game_name)
-        env = CustomGymClassicControl(gym_env)
+        if game_name == 'CartPole-v0':
+            env = CustomGymClassicControl(gym_env)
+        else:
+            print "Assuming ATARI game and playing with pixels"
+            env = CustomGym(gym_env, game_name)
         envs.append(env)
+
+    # Separate out the evaluation environment
+    evaluation_env = envs[0]
+    envs = envs[1:]
 
     T_queue = Queue.Queue()
     T_queue.put(0)
@@ -218,15 +239,25 @@ def a3c(game_name, num_threads=8, restore=False, checkpoint_file='model'):
 
         summary = Summary('tensorboard', agent)
 
+        # Create a process for each worker
         for i in range(num_threads):
             processes.append(threading.Thread(target=async_trainer, args=(agent,
             envs[i], sess, i, T_queue, summary, saver, checkpoint_file,)))
+
+        # Create a process to evaluate the agent
+        processes.append(threading.Thread(target=evaluator, args=(agent,
+        evaluation_env, sess, T_queue, summary, saver, checkpoint_file,)))
+
+        # Start all the processes
         for p in processes:
             p.daemon = True
             p.start()
 
+        # Until training is finished
         while not training_finished:
             sleep(0.01)
+
+        # Join the processes, so we get this thread back.
         for p in processes:
             p.join()
 
@@ -237,9 +268,15 @@ def discount(rewards, gamma):
 def test_equals(arr1, arr2, eps):
     return np.sum(np.abs(np.array(arr1)-np.array(arr2))) < eps
 
-checkpoint_file = 'model/model-' + strftime("%d-%m-%Y-%H:%M:%S", gmtime())
+if len(sys.argv) > 1:
+    game_name = sys.argv[1]
+    print "Using game", game_name
+else:
+    game_name = 'Pong-v0'
+
+checkpoint_file = 'model/' + game_name + 'model-' + \
+strftime("%d-%m-%Y-%H:%M:%S", gmtime())
+
 print "Using checkpoint file", checkpoint_file
-#a3c('SpaceInvaders-v0', num_threads=NUM_THREADS, restore=False,
-#checkpoint_file=checkpoint_file)
-a3c('CartPole-v0', num_threads=NUM_THREADS, restore=False,
+a3c(game_name, num_threads=NUM_THREADS, restore=False,
 checkpoint_file=checkpoint_file)

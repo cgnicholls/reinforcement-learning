@@ -3,18 +3,31 @@ import gym
 import numpy as np
 import random
 
+
+
 class CustomGym:
-    def __init__(self, env, skip_actions=4, nb_frames=4, w=84, h=84):
+    def __init__(self, env, game_name, skip_actions=4, nb_frames=4, w=84, h=84):
         self.env = env
         self.nb_frames = nb_frames
         self.skip_actions = skip_actions
         self.w = w
         self.h = h
-        self.action_space = [1,2,3] # For space invaders
+        if game_name == 'SpaceInvaders-v0':
+            self.action_space = [1,2,3] # For space invaders
+        elif game_name == 'Pong-v0':
+            self.action_space = [1,2,3]
+        elif game_name == 'Breakout-v0':
+            self.action_space = [1,4,5]
+        else:
+            # Use the actions specified by Open AI. Sometimes this has more
+            # actions than we want, and some actions do the same thing.
+            self.action_space = range(env.action_space.n)
+
         self.action_size = len(self.action_space)
+        self.observation_shape = env.observation_space.shape
 
         self.state = None
-        self.has_lives = hasattr(self.env, 'ale') and hasattr(self.env.ale, 'lives')
+        self.game_name = game_name
 
     def preprocess(self, obs, is_start=False):
         grayscale = obs.astype('float32').mean(2)
@@ -33,8 +46,6 @@ class CustomGym:
         return self.preprocess(self.env.reset(), is_start=True)
 
     def step(self, action_idx):
-        if self.has_lives:
-            start_lives = self.env.ale.lives()
         action = self.action_space[action_idx]
         accum_reward = 0
         prev_s = None
@@ -46,6 +57,6 @@ class CustomGym:
             prev_s = s
         # Takes maximum value for each pixel value over the current and previous
         # frame. Used to get round Atari sprites flickering (Mnih et al. (2015))
-        if self.has_lives and prev_s is not None:
+        if self.game_name == 'SpaceInvaders-v0' and prev_s is not None:
             s = np.maximum.reduce([s, prev_s])
         return self.preprocess(s), accum_reward, term, info

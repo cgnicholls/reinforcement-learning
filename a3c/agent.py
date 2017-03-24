@@ -93,6 +93,11 @@ class Agent():
     def get_value(self, state):
         return self.sess.run(self.value, {self.state: state}).flatten()
 
+    def get_policy_and_value(self, state):
+        policy, value = self.sess.run([self.policy, self.value], {self.state:
+        state})
+        return policy.flatten(), value.flatten()
+
     # Train the network on the given states and rewards
     def train(self, states, actions, target_values, advantages):
         # Training
@@ -102,23 +107,6 @@ class Agent():
             self.target_value: target_values,
             self.advantages: advantages
         })
-        #if TESTING:
-        #    advantages, log_policy, policy, policy_loss, value_loss, entropy, loss = \
-        #    self.sess.run([self.advantages, self.log_pi_for_action, self.policy,
-        #    self.policy_loss, self.value_loss, self.entropy, self.loss],
-        #    feed_dict={
-        #        self.state: states,
-        #        self.action: actions,
-        #        self.target_value: target_values,
-        #        self.advantages: advantages
-        #    })
-        #    if np.isnan(loss):
-        #        print "loss", loss
-        #        print "Policy", policy
-        #        print "policy_loss", policy_loss, "value_loss", \
-        #        value_loss, "entropy", entropy, "loss", loss
-        #        print "Advantages", advantages, "log policy", log_policy
-        #    assert not np.isnan(loss)
 
     # Builds the DQN model as in Mnih, but we get a softmax output for the
     # policy from fc1 and a linear output for the value from fc1.
@@ -189,10 +177,19 @@ class Agent():
             weights_initializer=tf.contrib.layers.xavier_initializer(),
             biases_initializer=tf.zeros_initializer())
             self.layers['fc1'] = fc1
+
+        # Fully connected layer with num_hidden hidden units
+        with tf.variable_scope('fc2'):
+            fc2 = tf.contrib.layers.fully_connected(inputs=fc1,
+            num_outputs=num_hidden,
+            activation_fn=tf.nn.relu,
+            weights_initializer=tf.contrib.layers.xavier_initializer(),
+            biases_initializer=tf.zeros_initializer())
+            self.layers['fc2'] = fc2
         
         # The policy output to the two possible actions
         with tf.variable_scope('policy'):
-            policy = tf.contrib.layers.fully_connected(inputs=fc1,
+            policy = tf.contrib.layers.fully_connected(inputs=fc2,
             num_outputs=self.action_size, activation_fn=tf.nn.softmax,
             weights_initializer=tf.contrib.layers.xavier_initializer(),
             biases_initializer=tf.zeros_initializer())
@@ -200,7 +197,7 @@ class Agent():
 
         # The value output
         with tf.variable_scope('value'):
-            value = tf.contrib.layers.fully_connected(inputs=fc1, num_outputs=1,
+            value = tf.contrib.layers.fully_connected(inputs=fc2, num_outputs=1,
             activation_fn=None,
             weights_initializer=tf.contrib.layers.xavier_initializer(),
             biases_initializer=tf.zeros_initializer())
