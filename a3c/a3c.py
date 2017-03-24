@@ -184,27 +184,29 @@ def estimate_reward(agent, env, episodes=10, max_steps=10000):
 
 def evaluator(agent, env, sess, T_queue, summary, saver, checkpoint_file):
     # Read T and put the same T back on.
-    T = 0
+    T = T_queue.get()
+    T_queue.put(T)
     last_time = time()
     last_verbose = T
     while T < T_MAX:
         T = T_queue.get()
         T_queue.put(T)
         if T - last_verbose >= VERBOSE_EVERY:
-            print "T", T, "last_verbose", last_verbose
+            print "T", T
             current_time = time()
             print "Train steps per second", float(T - last_verbose) / (current_time - last_time)
             last_time = current_time
-            print "T", T, "Evaluating agent"
-            
             last_verbose = T
+            
+            print "T", T, "Evaluating agent"
             episode_rewards, episode_vals = estimate_reward(agent, env, episodes=5)
             avg_ep_r = np.mean(episode_rewards)
             avg_val = np.mean(episode_vals)
             print "Avg ep reward", avg_ep_r, "Average value", avg_val
+
             summary.write_summary({'episode_avg_reward': avg_ep_r, 'avg_value': avg_val}, T)
-            print "Saving"
             saver.save(sess, checkpoint_file, global_step=T)
+            print "Saved"
         sleep(1.0)
 
 # If restore is True, then start the model from the most recent checkpoint.
