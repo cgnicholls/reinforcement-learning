@@ -28,6 +28,10 @@ EPSILON_STEPS = 4000000
 TESTING = False
 
 I_ASYNC_UPDATE = 5
+FLAGS = {"T_MAX": T_MAX, "NUM_THREADS": NUM_THREADS, "STATE_FRAMES":
+STATE_FRAMES, "INITIAL_LEARNING_RATE": INITIAL_LEARNING_RATE, "DISCOUNT_FACTOR":
+DISCOUNT_FACTOR, "VERBOSE_EVERY": VERBOSE_EVERY, "EPSILON_STEPS": EPSILON_STEPS,
+"TESTING": TESTING, "I_ASYNC_UPDATE": I_ASYNC_UPDATE}
 
 training_finished = False
 
@@ -272,11 +276,12 @@ if len(sys.argv) > 1:
     game_name = sys.argv[1]
     print "Using game", game_name
 else:
-    game_name = 'Pong-v0'
+    game_name = 'SpaceInvaders-v0'
 
 checkpoint_file = 'model/' + game_name + 'model-' + \
 strftime("%d-%m-%Y-%H:%M:%S", gmtime())
 
+print "Using flags", FLAGS
 print "Using checkpoint file", checkpoint_file
 a3c(game_name, num_threads=NUM_THREADS, restore=False,
 checkpoint_file=checkpoint_file)
