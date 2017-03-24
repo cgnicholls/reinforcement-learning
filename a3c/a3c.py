@@ -1,38 +1,17 @@
 # coding: utf-8
 # Implements the asynchronous advantage actor-critic algorithm.
 
-# Pseudocode (for each actor-learner thread):
-# Assume global shared theta, theta_target and counter T = 0.
-# Initialize thread step counter t <- 0
-# Initialize target network weights theta_target <- theta
-# Initialize network gradients dtheta <- 0
-# Get initial state s
-# repeat
-#   take action a with epsilon-greedy policy based on Q(s,a;theta)
-#   receive new state s' and reward r
-#   y = r (for terminal s')
-#     = r + gamma * max_a' Q(s', a', theta_target) (for non-terminal s')
-#   accumulate gradients wrt theta: dtheta <- dtheta + grad_theta(y-Q(s,a;theta))^2
-#   s = s'
-#   T <- T + 1 and t <- t + 1
-#   if T mod I_target == 0:
-#       update target network theta_target <- theta
-#   if t mod I_asyncupdate == 0 or s is terminal:
-#       perform asynchronous update of theta using dtheta
-#       clear gradients dtheta <- 0
-# until T > T_max
-
 import os
 import sys
 import multiprocessing
 import threading
 import tensorflow as tf
 import numpy as np
-from time import sleep
-from time import gmtime, strftime
+from time import time, sleep, gmtime, strftime
 import gym
 import Queue
 from custom_gym import CustomGym
+from custom_gym_classic_control import CustomGymClassicControl
 import random
 from agent import Agent
 
@@ -45,10 +24,10 @@ STATE_FRAMES = 4
 INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
 VERBOSE_EVERY = 10000
-EPSILON_STEPS = 4000000
+EPSILON_STEPS = 400000
 TESTING = False
 
-I_ASYNC_UPDATE = 5
+I_ASYNC_UPDATE = 20
 
 training_finished = False
 
@@ -91,6 +70,7 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
     t = 0
 
     last_verbose = T
+    last_time = time()
     last_target_update = T
 
     terminal = True
@@ -177,7 +157,11 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
 
         if thread_idx == 0:
             if T - last_verbose >= VERBOSE_EVERY and terminal:
+                current_time = time()
+                print "Train steps per second", float(T - last_verbose) / (current_time - last_time)
+                last_time = current_time
                 print "Worker", thread_idx, "T", T, "Evaluating agent"
+                
                 last_verbose = T
                 episode_rewards, episode_vals = estimate_reward(agent, env, episodes=5)
                 avg_ep_r = np.mean(episode_rewards)
@@ -208,20 +192,20 @@ def estimate_reward(agent, env, episodes=10):
 
 # If restore is True, then start the model from the most recent checkpoint.
 # Else initialise as usual.
-def a3c(game_name, nb_threads=8, restore=False, checkpoint_file='model'):
+def a3c(game_name, num_threads=8, restore=False, checkpoint_file='model'):
     processes = []
     envs = []
-    for _ in range(nb_threads):
+    for _ in range(num_threads):
         gym_env = gym.make(game_name)
-        env = CustomGym(gym_env)
+        env = CustomGymClassicControl(gym_env)
         envs.append(env)
 
     T_queue = Queue.Queue()
     T_queue.put(0)
 
     with tf.Session() as sess:
-        agent = Agent(session=sess, action_size=envs[0].action_size,
-        h=84, w=84, channels=STATE_FRAMES,
+        agent = Agent(session=sess, observation_shape=envs[0].observation_shape,
+        action_size=envs[0].action_size,
         optimizer=tf.train.AdamOptimizer(INITIAL_LEARNING_RATE))
 
         # Create a saver, and only keep 2 checkpoints.
@@ -234,7 +218,7 @@ def a3c(game_name, nb_threads=8, restore=False, checkpoint_file='model'):
 
         summary = Summary('tensorboard', agent)
 
-        for i in range(nb_threads):
+        for i in range(num_threads):
             processes.append(threading.Thread(target=async_trainer, args=(agent,
             envs[i], sess, i, T_queue, summary, saver, checkpoint_file,)))
         for p in processes:
@@ -255,5 +239,7 @@ def test_equals(arr1, arr2, eps):
 
 checkpoint_file = 'model/model-' + strftime("%d-%m-%Y-%H:%M:%S", gmtime())
 print "Using checkpoint file", checkpoint_file
-a3c('SpaceInvaders-v0', nb_threads=NUM_THREADS, restore=False,
+#a3c('SpaceInvaders-v0', num_threads=NUM_THREADS, restore=False,
+#checkpoint_file=checkpoint_file)
+a3c('CartPole-v0', num_threads=NUM_THREADS, restore=False,
 checkpoint_file=checkpoint_file)

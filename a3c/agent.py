@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 class Agent():
-    def __init__(self, session, action_size, h=84, w=84, channels=4,
+    def __init__(self, session, observation_shape, action_size,
         optimizer=tf.train.AdamOptimizer(1e-4)):
 
         self.action_size = action_size
@@ -12,7 +12,10 @@ class Agent():
         with tf.variable_scope('network'):
             self.action = tf.placeholder('int32', [None], name='action')
             self.target_value = tf.placeholder('float32', [None], name='target_value')
-            self.state, self.policy, self.value = self.build_model(h, w, channels)
+            if observation_shape == (210, 160, 3):
+                self.state, self.policy, self.value = self.build_model(84, 84, 4)
+            else:
+                self.state, self.policy, self.value = self.build_model_feedforward(4)
             self.weights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
             scope='network')
             self.advantages = tf.placeholder('float32', [None], name='advantages')
@@ -155,6 +158,39 @@ class Agent():
             self.layers['fc1'] = fc1
         
         # The policy output
+        with tf.variable_scope('policy'):
+            policy = tf.contrib.layers.fully_connected(inputs=fc1,
+            num_outputs=self.action_size, activation_fn=tf.nn.softmax,
+            weights_initializer=tf.contrib.layers.xavier_initializer(),
+            biases_initializer=tf.zeros_initializer())
+            self.layers['policy'] = policy
+
+        # The value output
+        with tf.variable_scope('value'):
+            value = tf.contrib.layers.fully_connected(inputs=fc1, num_outputs=1,
+            activation_fn=None,
+            weights_initializer=tf.contrib.layers.xavier_initializer(),
+            biases_initializer=tf.zeros_initializer())
+            self.layers['value'] = value
+
+        return state, policy, value
+
+    # Builds a simple feedforward model to learn the cart and pole environment.
+    def build_model_feedforward(self, input_dim, num_hidden=30):
+        self.layers = {}
+        state = tf.placeholder('float32', shape=(None, input_dim), name='state')
+
+        self.layers['state'] = state
+        # Fully connected layer with num_hidden hidden units
+        with tf.variable_scope('fc1'):
+            fc1 = tf.contrib.layers.fully_connected(inputs=state,
+            num_outputs=num_hidden,
+            activation_fn=tf.nn.relu,
+            weights_initializer=tf.contrib.layers.xavier_initializer(),
+            biases_initializer=tf.zeros_initializer())
+            self.layers['fc1'] = fc1
+        
+        # The policy output to the two possible actions
         with tf.variable_scope('policy'):
             policy = tf.contrib.layers.fully_connected(inputs=fc1,
             num_outputs=self.action_size, activation_fn=tf.nn.softmax,
