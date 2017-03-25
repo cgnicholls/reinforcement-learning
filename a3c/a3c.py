@@ -22,7 +22,7 @@ T_MAX = 100000000
 NUM_THREADS = 8
 INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
-VERBOSE_EVERY = 10000
+VERBOSE_EVERY = 1000
 TESTING = False
 
 I_ASYNC_UPDATE = 5
@@ -265,6 +265,7 @@ def test_equals(arr1, arr2, eps):
 def main(argv):
     num_threads = NUM_THREADS
     game_name = 'SpaceInvaders-v0'
+    save_path = None
     restore = None
     try:
         opts, args = getopt.getopt(argv, "hg:s:r:t:")
@@ -291,8 +292,8 @@ def main(argv):
     if game_name is None:
         print "No game name specified, so playing", game_name
     if save_path is None:
-        save_path = 'model/' + game_name + '-model-' + \
-        strftime("%d-%m-%Y-%H:%M:%S/", gmtime())
+        save_path = 'experiments/' + game_name + '/' + \
+        strftime("%d-%m-%Y-%H:%M:%S/model", gmtime())
         print "No save path specified, so saving to", save_path
     if not os.path.exists(save_path):
         print "Path doesn't exist, so creating"
