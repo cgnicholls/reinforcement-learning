@@ -23,7 +23,7 @@ NUM_THREADS = 8
 STATE_FRAMES = 4
 INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
-VERBOSE_EVERY = 10000
+VERBOSE_EVERY = 50000
 EPSILON_STEPS = 4000000
 TESTING = False
 
@@ -198,7 +198,7 @@ def evaluator(agent, env, sess, T_queue, summary, saver, checkpoint_file):
             last_time = current_time
             last_verbose = T
             
-            print "T", T, "Evaluating agent"
+            print "Evaluating agent"
             episode_rewards, episode_vals = estimate_reward(agent, env, episodes=5)
             avg_ep_r = np.mean(episode_rewards)
             avg_val = np.mean(episode_vals)
@@ -274,16 +274,24 @@ def discount(rewards, gamma):
 def test_equals(arr1, arr2, eps):
     return np.sum(np.abs(np.array(arr1)-np.array(arr2))) < eps
 
-if len(sys.argv) > 1:
+if len(sys.argv) == 2:
     game_name = sys.argv[1]
     print "Using game", game_name
+    checkpoint_file = 'model/' + game_name + '-model-' + \
+    strftime("%d-%m-%Y-%H:%M:%S", gmtime())
+    restore = False
+elif len(sys.argv) == 3:
+    # Eventually want to be able to restore, but can't currently.
+    game_name = sys.argv[1]
+    checkpoint_file = sys.argv[2]
+    restore = True
 else:
     game_name = 'SpaceInvaders-v0'
-
-checkpoint_file = 'model/' + game_name + 'model-' + \
-strftime("%d-%m-%Y-%H:%M:%S", gmtime())
+    checkpoint_file = 'model/' + game_name + '-model-' + \
+    strftime("%d-%m-%Y-%H:%M:%S", gmtime())
+    restore = False
 
 print "Using flags", FLAGS
 print "Using checkpoint file", checkpoint_file
-a3c(game_name, num_threads=NUM_THREADS, restore=False,
+a3c(game_name, num_threads=NUM_THREADS, restore=restore,
 checkpoint_file=checkpoint_file)
