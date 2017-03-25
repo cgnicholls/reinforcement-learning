@@ -150,7 +150,7 @@ class Agent():
             policy = tf.contrib.layers.fully_connected(inputs=fc1,
             num_outputs=self.action_size, activation_fn=tf.nn.softmax,
             weights_initializer=tf.contrib.layers.xavier_initializer(),
-            biases_initializer=tf.zeros_initializer())
+            biases_initializer=None)
             self.layers['policy'] = policy
 
         # The value output
@@ -158,7 +158,7 @@ class Agent():
             value = tf.contrib.layers.fully_connected(inputs=fc1, num_outputs=1,
             activation_fn=None,
             weights_initializer=tf.contrib.layers.xavier_initializer(),
-            biases_initializer=tf.zeros_initializer())
+            biases_initializer=None)
             self.layers['value'] = value
 
         return state, policy, value
