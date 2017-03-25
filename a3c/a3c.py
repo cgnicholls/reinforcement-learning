@@ -24,14 +24,13 @@ STATE_FRAMES = 4
 INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
 VERBOSE_EVERY = 50000
-EPSILON_STEPS = 4000000
 TESTING = False
 
 I_ASYNC_UPDATE = 5
 FLAGS = {"T_MAX": T_MAX, "NUM_THREADS": NUM_THREADS, "STATE_FRAMES":
 STATE_FRAMES, "INITIAL_LEARNING_RATE": INITIAL_LEARNING_RATE, "DISCOUNT_FACTOR":
-DISCOUNT_FACTOR, "VERBOSE_EVERY": VERBOSE_EVERY, "EPSILON_STEPS": EPSILON_STEPS,
-"TESTING": TESTING, "I_ASYNC_UPDATE": I_ASYNC_UPDATE}
+DISCOUNT_FACTOR, "VERBOSE_EVERY": VERBOSE_EVERY, "TESTING": TESTING,
+"I_ASYNC_UPDATE": I_ASYNC_UPDATE}
 
 training_finished = False
 
@@ -57,20 +56,12 @@ class Summary:
         self.agent.sess.run(self.update_ops, {self.summary_ph[k]: v for k, v in summary.items()})
         summary_to_add = self.agent.sess.run(self.summary_op, {self.summary_vars[k]: v for k, v in summary.items()})
         self.writer.add_summary(summary_to_add, global_step=t)
-        
-
-def get_epsilon(global_step, epsilon_steps, epsilon_min):
-    epsilon = 1.0 - float(global_step) / float(epsilon_steps) * (1.0 - epsilon_min)
-    return epsilon if epsilon > epsilon_min else epsilon_min
 
 def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
     checkpoint_file):
     print "Training thread", thread_idx
-    # Choose a minimum epsilon once and for all for this agent.
     T = T_queue.get()
     T_queue.put(T+1)
-    epsilon_min = random.choice(4*[0.1] + 3*[0.01] + 3*[0.5])
-    epsilon = get_epsilon(T, EPSILON_STEPS, epsilon_min)
     t = 0
 
     last_verbose = T
@@ -97,10 +88,7 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
             # probabilities. We do this anyway to prevent us having to compute
             # the baseline value separately.
             policy, value = agent.get_policy_and_value(state)
-            if random.random() < epsilon:
-                action_idx = random.randrange(agent.action_size)
-            else:
-                action_idx = np.random.choice(agent.action_size, p=policy)
+            action_idx = np.random.choice(agent.action_size, p=policy)
 
             # Take the action and get the next state, reward and terminal.
             state, reward, terminal, _ = env.step(action_idx)
@@ -154,9 +142,6 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
         # Apply asynchronous gradient update
         agent.train(np.vstack(batch_states), batch_actions, batch_target_values,
         batch_advantages)
-
-        # Anneal epsilon
-        epsilon = get_epsilon(T, EPSILON_STEPS, epsilon_min)
 
     global training_finished
     training_finished = True
