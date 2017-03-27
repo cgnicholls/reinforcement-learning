@@ -22,7 +22,7 @@ T_MAX = 100000000
 NUM_THREADS = 8
 INITIAL_LEARNING_RATE = 1e-4
 DISCOUNT_FACTOR = 0.99
-VERBOSE_EVERY = 40000
+VERBOSE_EVERY = 50000
 TESTING = False
 
 I_ASYNC_UPDATE = 5
@@ -96,7 +96,8 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
                 agent.rnn_state_in[1]: rnn_state[1]})
 
             # policy and value are currently arrays but we want scalars.
-            policy = policy[0]
+            policy = policy.flatten()
+            value = value.flatten()
             value = value[0]
 
             # Choose the action according to the policy.
@@ -116,7 +117,7 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
             # Save the rewards and actions
             batch_rewards.append(reward)
             batch_actions.append(action_idx)
-            baseline_values.append(value[0])
+            baseline_values.append(value)
 
         target_value = 0
         # If the last state was terminal, just put R = 0. Else we want the
@@ -192,7 +193,8 @@ def estimate_reward(agent, env, episodes=10, max_steps=10000):
                 agent.rnn_state_in[1]: rnn_state[1]})
 
             # policy and value are currently arrays but we want scalars.
-            policy = policy[0]
+            policy = policy.flatten()
+            value = value.flatten()
             value = value[0]
 
             action_idx = np.random.choice(agent.action_size, p=policy)
