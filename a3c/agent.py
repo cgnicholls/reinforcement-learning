@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 class Agent():
-    def __init__(self, session, observation_shape, action_size,
+    def __init__(self, session, action_size, model='mnih',
         optimizer=tf.train.AdamOptimizer(1e-4)):
 
         self.action_size = action_size
@@ -12,9 +12,10 @@ class Agent():
         with tf.variable_scope('network'):
             self.action = tf.placeholder('int32', [None], name='action')
             self.target_value = tf.placeholder('float32', [None], name='target_value')
-            if observation_shape == (210, 160, 3):
+            if model == 'mnih':
                 self.state, self.policy, self.value = self.build_model(84, 84, 4)
             else:
+                # Assume we wanted a feedforward neural network
                 self.state, self.policy, self.value = self.build_model_feedforward(4)
             self.weights = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES,
             scope='network')
@@ -54,7 +55,7 @@ class Agent():
             # Note that the target value should be the discounted reward for the
             # state as just sampled.
             self.value_loss = tf.reduce_mean(tf.square(self.target_value - self.value))
-            
+
             # We follow Mnih's paper and introduce the entropy as another loss
             # to the policy. The entropy of a probability distribution is just
             # the expected value of - log P(X), denoted E(-log P(X)), which we
@@ -89,7 +90,7 @@ class Agent():
 
     def get_policy(self, state):
         return self.sess.run(self.policy, {self.state: state}).flatten()
-    
+
     def get_value(self, state):
         return self.sess.run(self.value, {self.state: state}).flatten()
 
@@ -122,7 +123,7 @@ class Agent():
             weights_initializer=tf.contrib.layers.xavier_initializer_conv2d(),
             biases_initializer=tf.zeros_initializer())
             self.layers['conv1'] = conv1
-        
+
         # Second convolutional layer
         with tf.variable_scope('conv2'):
             conv2 = tf.contrib.layers.convolution2d(inputs=conv1, num_outputs=32,
@@ -144,7 +145,7 @@ class Agent():
             weights_initializer=tf.contrib.layers.xavier_initializer(),
             biases_initializer=tf.zeros_initializer())
             self.layers['fc1'] = fc1
-        
+
         # The policy output
         with tf.variable_scope('policy'):
             policy = tf.contrib.layers.fully_connected(inputs=fc1,
@@ -186,7 +187,7 @@ class Agent():
             weights_initializer=tf.contrib.layers.xavier_initializer(),
             biases_initializer=tf.zeros_initializer())
             self.layers['fc2'] = fc2
-        
+
         # The policy output to the two possible actions
         with tf.variable_scope('policy'):
             policy = tf.contrib.layers.fully_connected(inputs=fc2,

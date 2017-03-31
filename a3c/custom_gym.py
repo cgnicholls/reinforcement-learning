@@ -6,9 +6,9 @@ import random
 
 
 class CustomGym:
-    def __init__(self, env, game_name, skip_actions=4, nb_frames=4, w=84, h=84):
-        self.env = env
-        self.nb_frames = nb_frames
+    def __init__(self, game_name, skip_actions=4, num_frames=4, w=84, h=84):
+        self.env = gym.make(game_name)
+        self.num_frames = num_frames
         self.skip_actions = skip_actions
         self.w = w
         self.h = h
@@ -24,7 +24,7 @@ class CustomGym:
             self.action_space = range(env.action_space.n)
 
         self.action_size = len(self.action_space)
-        self.observation_shape = env.observation_space.shape
+        self.observation_shape = self.env.observation_space.shape
 
         self.state = None
         self.game_name = game_name
@@ -34,9 +34,9 @@ class CustomGym:
         s = imresize(grayscale, (self.w, self.h)).astype('float32') * (1.0/255.0)
         s = s.reshape(1, s.shape[0], s.shape[1], 1)
         if is_start or self.state is None:
-            self.state = np.repeat(s, self.nb_frames, axis=3)
+            self.state = np.repeat(s, self.num_frames, axis=3)
         else:
-            self.state = np.append(s, self.state[:,:,:,:self.nb_frames-1], axis=3)
+            self.state = np.append(s, self.state[:,:,:,:self.num_frames-1], axis=3)
         return self.state
 
     def render(self):

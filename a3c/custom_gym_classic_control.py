@@ -3,8 +3,8 @@ import numpy as np
 import random
 
 class CustomGymClassicControl:
-    def __init__(self, env, skip_actions=4):
-        self.env = env
+    def __init__(self, game_name, skip_actions=4):
+        self.env = gym.make(game_name)
         self.skip_actions = skip_actions
         self.action_size = env.action_space.n
         self.action_space = range(self.action_size)

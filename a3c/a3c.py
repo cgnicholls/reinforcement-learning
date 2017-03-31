@@ -50,7 +50,7 @@ class Summary:
             for k in self.summary_vars:
                 self.update_ops.append(self.summary_vars[k].assign(self.summary_ph[k]))
             self.summary_op = tf.summary.merge(list(self.summary_ops.values()))
-            
+
     def write_summary(self, summary, t):
         self.agent.sess.run(self.update_ops, {self.summary_ph[k]: v for k, v in summary.items()})
         summary_to_add = self.agent.sess.run(self.summary_op, {self.summary_vars[k]: v for k, v in summary.items()})
@@ -82,7 +82,7 @@ def async_trainer(agent, env, sess, thread_idx, T_queue, summary, saver,
         while not terminal and len(batch_states) < I_ASYNC_UPDATE:
             # Save the current state
             batch_states.append(state)
-            
+
             # Choose an action randomly according to the policy
             # probabilities. We do this anyway to prevent us having to compute
             # the baseline value separately.
@@ -181,7 +181,7 @@ def evaluator(agent, env, sess, T_queue, summary, saver, save_path):
             print "Train steps per second", float(T - last_verbose) / (current_time - last_time)
             last_time = current_time
             last_verbose = T
-            
+
             print "Evaluating agent"
             episode_rewards, episode_vals = estimate_reward(agent, env, episodes=5)
             avg_ep_r = np.mean(episode_rewards)
@@ -201,10 +201,10 @@ def a3c(game_name, num_threads=8, restore=None, save_path='model'):
     for _ in range(num_threads+1):
         gym_env = gym.make(game_name)
         if game_name == 'CartPole-v0':
-            env = CustomGymClassicControl(gym_env)
+            env = CustomGymClassicControl(game_name)
         else:
             print "Assuming ATARI game and playing with pixels"
-            env = CustomGym(gym_env, game_name)
+            env = CustomGym(game_name)
         envs.append(env)
 
     # Separate out the evaluation environment
@@ -212,8 +212,8 @@ def a3c(game_name, num_threads=8, restore=None, save_path='model'):
     envs = envs[1:]
 
     with tf.Session() as sess:
-        agent = Agent(session=sess, observation_shape=envs[0].observation_shape,
-        action_size=envs[0].action_size,
+        agent = Agent(session=sess,
+        action_size=envs[0].action_size, model='mnih',
         optimizer=tf.train.AdamOptimizer(INITIAL_LEARNING_RATE))
 
         # Create a saver, and only keep 2 checkpoints.
