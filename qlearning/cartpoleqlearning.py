@@ -4,9 +4,10 @@ import tensorflow as tf
 from random import sample, random
 from collections import deque
 
-def fully_connected(inputs, num_outputs, activation_fn):
+def fully_connected(inputs, num_outputs, activation_fn, l2_reg=0.1):
     return tf.contrib.layers.fully_connected(inputs=inputs, num_outputs=num_outputs, activation_fn=activation_fn, weights_initializer=tf.contrib.layers.xavier_initializer(),
-    biases_initializer=tf.zeros_initializer())
+    biases_initializer=tf.zeros_initializer(),
+    weights_regularizer=tf.contrib.layers.l2_regularizer(l2_reg))
 
 def create_network(input_dim, hidden_dims, output_dim, scope):
     with tf.variable_scope(scope):
@@ -33,7 +34,7 @@ def qlearning(env, input_dim, num_actions, max_episodes=100000, update_target_ev
     transitions = deque()
 
     # Create the current network as well as the target network.
-    hidden_dims = []
+    hidden_dims = [4]
     input_layer, output_layer = create_network(input_dim, hidden_dims, num_actions, 'current')
     target_input_layer, target_output_layer = create_network(input_dim, hidden_dims, num_actions, 'target')
     update_ops = update_ops_from_to('current', 'target')
