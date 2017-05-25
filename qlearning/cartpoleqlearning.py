@@ -16,6 +16,7 @@ def create_network(input_dim, hidden_dims, output_dim, scope):
         hidden_layer = input_layer
         for dim in hidden_dims:
             hidden_layer = fully_connected(inputs=hidden_layer, num_outputs=dim, activation_fn=tf.nn.relu)
+            #hidden_layer = tf.nn.dropout(hidden_layer, 1.0)
 
         output_layer = fully_connected(inputs=hidden_layer, num_outputs=output_dim, activation_fn=None)
         return input_layer, output_layer
@@ -34,7 +35,7 @@ def qlearning(env, input_dim, num_actions, max_episodes=100000, update_target_ev
     transitions = deque()
 
     # Create the current network as well as the target network.
-    hidden_dims = [4]
+    hidden_dims = []
     input_layer, output_layer = create_network(input_dim, hidden_dims, num_actions, 'current')
     target_input_layer, target_output_layer = create_network(input_dim, hidden_dims, num_actions, 'target')
     update_ops = update_ops_from_to('current', 'target')
