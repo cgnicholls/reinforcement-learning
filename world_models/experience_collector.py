@@ -3,6 +3,7 @@ from collections import deque, namedtuple
 import random
 import numpy as np
 import pickle
+import deepdish as dd
 
 
 class ExperienceCollector:
@@ -36,11 +37,12 @@ StateActionTransition = namedtuple('StateActionTransition', ('state', 'action', 
 
 
 class StateActionCollector(ExperienceCollector):
-    """The StateActionCollector takes actions in the given environment according to the given agent, and stores
-    observed StateActionTransitions.
+    """The StateActionCollector takes actions in the given environment
+    according to the given agent, and stores observed StateActionTransitions.
 
-    The transition (state, action, next_state) means the environment was in state 'state',, the agent took action
-    'action', and then the environment transitioned to state 'next_state'.
+    The transition (state, action, next_state) means the environment was in
+    state 'state', the agent took action 'action', and then the environment
+    transitioned to state 'next_state'.
     """
 
     def __init__(self):
@@ -84,13 +86,13 @@ def save_rollouts(rollouts, f):
     states = np.stack(rollout.states)
 
 
-def save_numpy_arrays(arr, f):
-    """Saves a given dictionary of numpy arrays to the file object f."""
-    pass
+def save_numpy_arrays(arr, file_name):
+    """Saves a given dictionary of numpy arrays to the given file."""
+    dd.io.save(file_name, arr)
 
-def load_numpy_arrays(f):
-    """Loads a dictionary of numpy arrays from the file object f."""
-    pass
+def load_numpy_arrays(file_name):
+    """Loads a dictionary of numpy arrays from the given file."""
+    return dd.io.load(file_name)
 
 
 class RolloutCollector(ExperienceCollector):
@@ -103,7 +105,7 @@ class RolloutCollector(ExperienceCollector):
     def collect_experience(self, actor, environment, num_episodes):
         for i in range(num_episodes):
             state = environment.reset()
-            states = [state]
+            states = []
             actions = []
             done = False
             while not done:
@@ -120,16 +122,17 @@ class RolloutCollector(ExperienceCollector):
         return random.sample(self.rollouts, num_transitions)
 
     def save_experience(self, file_name):
-        rollouts_dict = {'states_{}'.format(i): v[0] for i, v in enumerate(self.rollouts)}
-        rollouts_dict.update({'actions_{}'.format(i): v[1] for i, v in enumerate(self.rollouts)})
-            with open(file_name, 'wb') as f:
-                save_numpy_arrays(rollouts_dict, f)
+        rollouts_dict = {'rollout_{}'.format(str(i)): (states, actions) for
+                         i, (states, actions) in enumerate(self.rollouts)}
+
+        save_numpy_arrays(rollouts_dict, file_name)
 
     def load_experience(self, file_name):
-        with open(file_name, 'rb') as f:
-            rollouts_dict = load_numpy_arrays(f)
+        loaded_rollouts = load_numpy_arrays(file_name)
+        loaded_rollouts = [Rollout(states, actions) for (states, actions) in
+                           loaded_rollouts.values()]
 
-        self.rollouts = 
+        self.rollouts += loaded_rollouts
 
     def reset_experience(self):
         self.rollouts = []

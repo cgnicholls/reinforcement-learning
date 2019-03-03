@@ -7,4 +7,4 @@ setup(name='deeprl',
       author='Chris Nicholls',
       author_email='cgnicholls@gmail.com',
       license='MIT',
-      packages=['deeprl', 'dqn2', 'world_models'])
+      packages=['world_models'])

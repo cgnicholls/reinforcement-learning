@@ -15,6 +15,9 @@ def test_pong_preprocess():
 
     assert state.shape == (64, 64, 3)
 
+    _, _, done, _ = env.step(2)
+    _, _, done, _ = env.step(2)
+    _, _, done, _ = env.step(2)
     state2, _, done, _ = env.step(2)
 
     assert state2.shape == (64, 64, 3)
