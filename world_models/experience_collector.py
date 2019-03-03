@@ -79,16 +79,11 @@ class StateActionCollector(ExperienceCollector):
 
 Rollout = namedtuple('Rollout', ('states', 'actions'))
 
-def rollout_to_array(rollout):
-    pass
-
-def save_rollouts(rollouts, f):
-    states = np.stack(rollout.states)
-
 
 def save_numpy_arrays(arr, file_name):
     """Saves a given dictionary of numpy arrays to the given file."""
     dd.io.save(file_name, arr)
+
 
 def load_numpy_arrays(file_name):
     """Loads a dictionary of numpy arrays from the given file."""

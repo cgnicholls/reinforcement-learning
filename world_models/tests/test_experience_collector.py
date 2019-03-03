@@ -8,8 +8,8 @@ from world_models.experience_collector import (StateActionCollector,
                                                RolloutCollector,
                                                save_numpy_arrays,
                                                load_numpy_arrays)
-from world_models.actor import Actor
-from world_models.environment import Environment
+from world_models.actor import Actor, RandomActor
+from world_models.environment import Environment, Pong
 
 
 class TestActor(Actor):
@@ -167,12 +167,5 @@ def test_save_and_load_numpy_arrays():
     np.testing.assert_allclose(x2, loaded['x2'])
 
 
-def test_rollout_to_arrays():
-    states = [np.array([[1, 2, 3], [4, 5, 6]]), np.array([[7, 8, 9], [-1, -2, -3]])]
-    actions = [2, 3]
-    rollout = Rollout(np.array(states, actions))
-
-    states_arr, actions_arr = rollout_to_arrays(rollout)
-
-    states = rollout.states
-    actions = rollout.actions
+def test_random_agent_can_collect_experience_on_pong():
+    actor = RandomActor([0, 1])
