@@ -131,3 +131,11 @@ class RolloutCollector(ExperienceCollector):
 
     def reset_experience(self):
         self.rollouts = []
+
+
+def get_rollout_states(rollouts):
+    states = []
+    for rollout in rollouts:
+        states.extend(rollout.states)
+
+    return states

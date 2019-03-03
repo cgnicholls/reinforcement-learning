@@ -3,11 +3,8 @@ import numpy as np
 import tempfile
 import pytest
 
-from world_models.experience_collector import (StateActionCollector,
-                                               StateActionTransition, Rollout,
-                                               RolloutCollector,
-                                               save_numpy_arrays,
-                                               load_numpy_arrays)
+from world_models.experience_collector import (StateActionCollector, StateActionTransition, Rollout, RolloutCollector,
+                                               save_numpy_arrays, load_numpy_arrays, get_rollout_states)
 from world_models.actor import Actor, RandomActor
 from world_models.environment import Environment, Pong
 
@@ -169,3 +166,18 @@ def test_save_and_load_numpy_arrays():
 
 def test_random_agent_can_collect_experience_on_pong():
     actor = RandomActor([0, 1])
+
+
+def test_can_get_states_from_rollouts():
+    states1 = [1, 2, 3, 4]
+    actions1 = [0, 1, 2, 3]
+
+    states2 = [5, 6, 7, 9]
+    actions2 = [4, 4, 4, 3]
+
+
+    rollouts = [Rollout(states1, actions1)]
+    assert get_rollout_states(rollouts) == states1
+
+    rollouts = [Rollout(states1, actions1), Rollout(states2, actions2)]
+    assert get_rollout_states(rollouts) == states1 + states2

@@ -1,4 +1,3 @@
-import numpy as np
 import tensorflow as tf
 
 
@@ -11,15 +10,14 @@ class VAE:
         self.batch_size = batch_size
         self.kl_tolerance = kl_tolerance # From Ha's implementation.
 
-        self.build_network()
+        self.build_graph()
 
-        self.sess = tf.Session(self.graph)
-
-    def build_network(self):
+    def build_graph(self):
         self.graph = tf.Graph()
         with tf.variable_scope('vae'):
             with self.graph.as_default():
                 self.input_layer = tf.placeholder(tf.float32, shape=[None, 64, 64, 3])
+                batch_size = tf.shape(self.input_layer)[0]
                 next = self.input_layer
 
                 # Encoder
@@ -34,10 +32,10 @@ class VAE:
                 next = tf.layers.flatten(next)
 
                 # VAE part
-                self.mu = tf.layers.dense(next, self.latent_dim, 'mu')
-                self.log_var = tf.layers.dense(next, self.latent_dim, 'log_var')
+                self.mu = tf.layers.dense(next, self.latent_dim, name='mu')
+                self.log_var = tf.layers.dense(next, self.latent_dim, name='log_var')
                 self.sigma = tf.exp(self.log_var / 2.0)
-                self.white_noise = tf.random_normal([self.batch_size, self.latent_dim])
+                self.white_noise = tf.random_normal([batch_size, self.latent_dim])
 
                 self.z = self.mu + self.sigma * self.white_noise
 
@@ -73,16 +71,35 @@ class VAE:
                     self.grads, global_step=self.global_step, name='train_op'
                 )
 
-    def train(self, xs):
+                self.init_op = tf.global_variables_initializer()
+
+    def initialise(self, sess):
+        sess.run(self.init_op)
+
+    def train(self, sess, xs):
         """Trains on the given xs. The xs should be a list of xs of the correct input shape.
         """
         assert xs.shape == (xs.shape[0], 64, 64, 3)
 
-        loss, _  = self.sess.run([self.loss, self.train_op], feed_dict={
+        loss, _ = sess.run([self.loss, self.train_op], feed_dict={
             self.input_layer: xs
         })
         return loss
 
-    def encode(self, xs):
+    def encode(self, sess, xs):
         assert xs.shape == (xs.shape[0], 64, 64, 3)
-        return self.sess.run(self.z, feed_dict={self.input_layer: xs})
+        return sess.run(self.z, feed_dict={self.input_layer: xs})
+
+    def encode_to_mu_sigma(self, sess, xs):
+        """Returns mu, sigma of the encoding.
+        """
+        assert xs.shape == (xs.shape[0], 64, 64, 3)
+        return sess.run([self.mu, self.sigma], feed_dict={self.input_layer: xs})
+
+    def save(self, sess, save_file):
+        saver = tf.train.Saver()
+        saver.save(sess, save_file)
+
+    def restore(self, sess, save_file):
+        saver = tf.train.Saver()
+        saver.restore(sess, save_file)

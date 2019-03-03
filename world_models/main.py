@@ -1,8 +1,12 @@
 import argparse
 import os
+import random
 import subprocess
 
-from world_models.experience_collector import RolloutCollector
+import numpy as np
+import tensorflow as tf
+
+from world_models.experience_collector import RolloutCollector, get_rollout_states
 from world_models.environment import Pong
 from world_models.actor import RandomActor
 from world_models.vae import VAE
@@ -42,10 +46,44 @@ def collect_rollouts(environment, save_dir, num_rollouts, max_dir_size_gb=1):
             break
 
 
-def run_vae(dataset_dir, batch_size=100):
-    vae = VAE(batch_size=batch_size)
+def create_experience_collector(dataset_dir):
+    rollout_files = []
+    for _, _, file_names in os.walk(dataset_dir):
+        rollout_files.extend(file_names)
+        break
+
+    rollout_files = [file_name for file_name in rollout_files if file_name.endswith('.h5')]
 
     experience_collector = RolloutCollector()
+
+    for file_name in rollout_files:
+        experience_collector.load_experience(file_name)
+
+    return experience_collector
+
+
+def run_vae(dataset_dir, batch_size=100, num_epochs=50):
+
+    experience_collector = create_experience_collector(dataset_dir)
+    states = get_rollout_states(experience_collector.rollouts)
+
+    vae = VAE(batch_size=batch_size)
+
+    with tf.Session(vae.graph) as sess:
+        vae.initialise(sess)
+        for i_epoch in range(num_epochs):
+            random.shuffle(states)
+
+            i = 0
+            while i < len(states):
+                x_minibatch = states[i: i + batch_size]
+                x_minibatch = np.stack(x_minibatch, axis=0)
+
+                assert x_minibatch.shape == (batch_size, 64, 64, 3)
+
+                vae.train(sess, x_minibatch)
+
+                i += batch_size
 
 
 def validate_experiment_id(experiment_id):
@@ -72,6 +110,9 @@ if __name__ == "__main__":
     parser_collect.add_argument(
         '--num_rollouts', default=10000, type=int,
         help='The number of rollouts to collect to train the V model.')
+    parser_collect.add_argument(
+        '--max_dir_size_gb', default=1, type=int,
+        help='The maximum size of the rollouts directory in GB.')
 
     parser_v = subparsers.add_parser(
         'v', help='Train the VAE on the collected rollouts.')
@@ -92,6 +133,6 @@ if __name__ == "__main__":
 
     if args.command == 'collect':
         # The VAE stage:
-        collect_rollouts(environment, experiment_dir, args.num_rollouts)
+        collect_rollouts(environment, experiment_dir, args.num_rollouts, args.max_dir_size_gb)
     elif args.command == 'v':
         run_vae(environment)
