@@ -1,7 +1,6 @@
-from io import StringIO
 import numpy as np
+import os
 import tempfile
-import pytest
 
 from world_models.experience_collector import (StateActionCollector, StateActionTransition, Rollout, RolloutCollector,
                                                save_numpy_arrays, load_numpy_arrays, get_rollout_states)

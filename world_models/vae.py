@@ -3,11 +3,10 @@ import tensorflow as tf
 
 class VAE:
 
-    def __init__(self, stride=2, latent_dim=32, learning_rate=1e-4, batch_size=1, kl_tolerance=0.5):
+    def __init__(self, stride=2, latent_dim=32, learning_rate=1e-4, kl_tolerance=0.5):
         self.stride = stride
         self.latent_dim = latent_dim
         self.learning_rate = learning_rate
-        self.batch_size = batch_size
         self.kl_tolerance = kl_tolerance # From Ha's implementation.
 
         self.build_graph()

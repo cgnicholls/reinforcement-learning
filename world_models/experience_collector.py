@@ -1,7 +1,6 @@
 import abc
-from collections import deque, namedtuple
+from collections import namedtuple
 import random
-import numpy as np
 import pickle
 import deepdish as dd
 
@@ -123,11 +122,15 @@ class RolloutCollector(ExperienceCollector):
         save_numpy_arrays(rollouts_dict, file_name)
 
     def load_experience(self, file_name):
-        loaded_rollouts = load_numpy_arrays(file_name)
-        loaded_rollouts = [Rollout(states, actions) for (states, actions) in
-                           loaded_rollouts.values()]
+        try:
+            loaded_rollouts = load_numpy_arrays(file_name)
+            loaded_rollouts = [Rollout(states, actions) for (states, actions) in
+                               loaded_rollouts.values()]
+            self.rollouts += loaded_rollouts
+        except ValueError as e:
+            print("Could not load experience for {}".format(file_name))
+            print(e)
 
-        self.rollouts += loaded_rollouts
 
     def reset_experience(self):
         self.rollouts = []
@@ -139,3 +142,25 @@ def get_rollout_states(rollouts):
         states.extend(rollout.states)
 
     return states
+
+
+class StatesServer:
+    """This class reads in rollouts stored in the given files and serves all states once."""
+
+    def __init__(self, file_names):
+        self.file_names = file_names
+        random.shuffle(self.file_names)
+
+    def serve(self, batch_size):
+        for file_name in self.file_names:
+            print("Serving {}".format(file_name))
+            experience_collector = RolloutCollector()
+            experience_collector.load_experience(file_name)
+
+            states = get_rollout_states(experience_collector.rollouts)
+            random.shuffle(states)
+
+            i = 0
+            while i < len(states):
+                yield states[i: i + batch_size]
+                i += batch_size
