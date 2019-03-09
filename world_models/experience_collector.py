@@ -153,7 +153,6 @@ class StatesServer:
 
     def serve(self, batch_size):
         for file_name in self.file_names:
-            print("Serving {}".format(file_name))
             experience_collector = RolloutCollector()
             experience_collector.load_experience(file_name)
 

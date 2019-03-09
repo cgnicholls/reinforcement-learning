@@ -76,28 +76,36 @@ def get_last_rollout_index(rollout_file_names):
     return max(indices)
 
 
-def run_vae(dataset_dir, batch_size=32, num_epochs=50):
+def run_vae(dataset_dir, checkpoint_dir, log_dir, batch_size=32, num_epochs=50, write_summary_every=100):
 
     rollout_file_names = get_rollout_file_names(dataset_dir)
 
     vae = VAE()
 
-    with tf.Session(graph=vae.graph) as sess:
+    writer = tf.summary.FileWriter(log_dir)
+
+    with tf.Session() as sess:
         vae.initialise(sess)
+        global_step = 0
         for i_epoch in range(num_epochs):
             states_server = StatesServer(rollout_file_names)
 
-            i = 0
             for x_minibatch in states_server.serve(batch_size):
-                print("Minibatch index: {}".format(i))
                 xs = np.stack(x_minibatch, axis=0)
-                print("Minibatch size: {}".format(xs.shape[0]))
 
-                loss = vae.train(sess, xs)
+                loss, summary = vae.train(sess, xs)
 
-                print("Loss: {}".format(loss))
+                if global_step % write_summary_every == 0:
+                    writer.add_summary(summary, global_step=global_step)
+                    print("Global step: {}".format(global_step))
+                    print("Minibatch size: {}".format(xs.shape[0]))
+                    print("Loss: {}".format(loss))
 
-                i += 1
+                global_step += 1
+
+            # Save checkpoint at the end of each epoch.
+            checkpoint_file = os.path.join(checkpoint_dir, 'checkpoint')
+            vae.save(sess, checkpoint_file, global_step=global_step)
 
 
 def validate_experiment_id(experiment_id):
@@ -139,14 +147,25 @@ if __name__ == "__main__":
 
     assert validate_experiment_id(args.experiment_id)
 
-    assert os.path.exists(args.experiment_dir), "{} does not exist".format(
-        args.experiment_dir)
+    assert os.path.exists(args.experiment_dir), "{} does not exist".format(args.experiment_dir)
     experiment_dir = os.path.join(args.experiment_dir, args.experiment_id)
+
     if not os.path.exists(experiment_dir):
         os.mkdir(experiment_dir)
+
+    data_dir = os.path.join(experiment_dir, 'data')
+    checkpoint_dir = os.path.join(experiment_dir, 'checkpoints')
+    log_dir = os.path.join(experiment_dir, 'logs')
+
+    if not os.path.exists(data_dir):
+        os.mkdir(data_dir)
+    if not os.path.exists(checkpoint_dir):
+        os.mkdir(checkpoint_dir)
+    if not os.path.exists(log_dir):
+        os.mkdir(log_dir)
 
     if args.command == 'collect':
         # The VAE stage:
         collect_rollouts(environment, experiment_dir, args.num_rollouts, args.max_dir_size_gb)
     elif args.command == 'v':
-        run_vae(experiment_dir)
+        run_vae(data_dir, checkpoint_dir, log_dir)

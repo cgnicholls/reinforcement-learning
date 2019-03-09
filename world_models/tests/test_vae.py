@@ -23,7 +23,7 @@ def test_can_train_vae():
 
     x = np.random.randn(1, 64, 64, 3)
 
-    with tf.Session(graph=vae.graph) as sess:
+    with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
 
         encoding_before = vae.encode(sess, x)
@@ -46,7 +46,7 @@ def test_can_save_and_restore_vae():
 
     save_file = tempfile.NamedTemporaryFile()
 
-    with tf.Session(graph=vae.graph) as sess:
+    with tf.Session() as sess:
         vae.initialise(sess)
 
         _ = vae.train(sess, training_data)
@@ -60,12 +60,19 @@ def test_can_save_and_restore_vae():
         # Check the encoding to mu, sigma is deterministic.
         np.testing.assert_allclose(encoding_before, encoding_before2)
 
-    vae2 = VAE()
+    with tf.Session() as sess:
+        vae.initialise(sess)
 
-    with tf.Session(graph=vae2.graph) as sess:
-        # When we restore to vae2, we want the same weights as when we saved vae.
-        vae2.restore(sess, save_file.name)
-        encoding_after = vae2.encode_to_mu_sigma(sess, x)
+        encoding_middle = vae.encode_to_mu_sigma(sess, x)
+
+        # Check that the encoding of x has changed after initialising.
+        with pytest.raises(AssertionError):
+            np.testing.assert_allclose(encoding_before, encoding_middle)
+
+        # When we restore to vae, we want the same weights as when we saved vae.
+        vae.restore(sess, save_file.name)
+
+        encoding_after = vae.encode_to_mu_sigma(sess, x)
 
         # Check the encoding to mu and sigma we saved is the same as for what we restored.
         np.testing.assert_allclose(encoding_before, encoding_after)
@@ -81,7 +88,7 @@ def test_generate_white_noise():
     batch_size = 100
     training_data = np.random.randn(batch_size, 64, 64, 3)
 
-    with tf.Session(graph=vae.graph) as sess:
+    with tf.Session() as sess:
         vae.initialise(sess)
 
         white_noise = sess.run(vae.white_noise, feed_dict={

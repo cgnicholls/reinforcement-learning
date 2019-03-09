@@ -1,6 +1,7 @@
 # To do list
 Items marked with '-' are pending. Items striked through are complete.
 
+- Save and load VAE in main
 - Tensorboard logging
 - Can we load it all into memory?
 - Ideally can do this within a bigger graph, so that we can later have the VAE as part of a big graph where we also have the MDN-RNN and controller.
@@ -10,7 +11,6 @@ Less important:
 - Make all minibatches the same size.
 
 Done:
-- ~~Save and load VAE.~~
 - ~~Can collect rollouts from a game to train the VAE.~~
 - ~~Can load in rollouts.~~
 - ~~Collect 10,000 rollouts from Pong.~~
