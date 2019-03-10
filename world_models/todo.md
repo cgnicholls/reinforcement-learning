@@ -1,6 +1,15 @@
 # To do list
 Items marked with '-' are pending. Items striked through are complete.
 
+- We can test how well each part does individually
+    - Replace VAE with just some well-known good features. E.g. for Pong - just
+     the (x, y) location of the ball and the y positions of the bats (note the
+     MDN-RNN should learn velocities).
+    - Replace VAE and MDN-RNN with good features - include velocity with the
+    above features.
+
+- Can train the MDN-RNN.
+    - Write the MDN-RNN.
 - Save and load VAE in main
 - Tensorboard logging
 - Can we load it all into memory?
